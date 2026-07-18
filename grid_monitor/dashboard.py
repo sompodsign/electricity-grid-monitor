@@ -4,7 +4,7 @@ import csv
 import html
 import io
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -71,6 +71,72 @@ def timeline_svg(events: list[PowerEvent], start: datetime, end: datetime) -> st
     return "".join(parts)
 
 
+def outage_pattern(
+    events: list[PowerEvent], start: datetime, end: datetime, tz
+) -> list[list[tuple[float, float] | None]]:
+    """Aggregate observed and outage seconds into local weekday/hour slots."""
+    observed = [[0.0 for _ in range(24)] for _ in range(7)]
+    outages = [[0.0 for _ in range(24)] for _ in range(7)]
+    for index, event in enumerate(events):
+        segment_start = max(start, event.timestamp)
+        segment_end = min(end, events[index + 1].timestamp if index + 1 < len(events) else end)
+        cursor = segment_start
+        while cursor < segment_end:
+            next_hour = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+            piece_end = min(segment_end, next_hour)
+            seconds = (piece_end - cursor).total_seconds()
+            local = cursor.astimezone(tz)
+            observed[local.weekday()][local.hour] += seconds
+            if event.state is PowerState.OFF:
+                outages[local.weekday()][local.hour] += seconds
+            cursor = piece_end
+
+    result: list[list[tuple[float, float] | None]] = []
+    for weekday in range(7):
+        row = []
+        for hour in range(24):
+            seconds = observed[weekday][hour]
+            row.append((outages[weekday][hour] / seconds * 100, seconds) if seconds else None)
+        result.append(row)
+    return result
+
+
+def pattern_chart(events: list[PowerEvent], start: datetime, end: datetime, tz) -> str:
+    weekdays = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+    pattern = outage_pattern(events, start, end, tz)
+    if not any(cell is not None for row in pattern for cell in row):
+        return '<div class="empty">No observations available for pattern analysis</div>'
+
+    headings = "".join(f"<th>{hour:02d}</th>" for hour in range(24))
+    rows = []
+    for weekday, values in zip(weekdays, pattern):
+        cells = []
+        for hour, value in enumerate(values):
+            if value is None:
+                cells.append(
+                    f'<td class="heat no-data" title="{weekday} {hour:02d}:00: not observed"></td>'
+                )
+                continue
+            percentage, observed_seconds = value
+            level = 0 if percentage == 0 else 1 if percentage < 10 else 2 if percentage < 30 else 3 if percentage < 60 else 4
+            detail = (
+                f"{weekday} {hour:02d}:00-{(hour + 1) % 24:02d}:00: "
+                f"{percentage:.1f}% outage over {format_duration(observed_seconds)} observed"
+            )
+            cells.append(
+                f'<td class="heat heat-{level}" title="{html.escape(detail)}">'
+                f'<span class="sr-only">{html.escape(detail)}</span></td>'
+            )
+        rows.append(f'<tr><th class="weekday">{weekday[:3]}</th>{"".join(cells)}</tr>')
+    return (
+        '<div class="heatmap-wrap"><table class="heatmap" aria-label="Outage percentage by weekday and hour">'
+        f'<thead><tr><th class="weekday">Day</th>{headings}</tr></thead><tbody>{"".join(rows)}</tbody>'
+        '</table></div><div class="heat-legend"><span>Less outage</span>'
+        '<i class="heat-0"></i><i class="heat-1"></i><i class="heat-2"></i><i class="heat-3"></i><i class="heat-4"></i>'
+        '<span>More outage</span><i class="no-data"></i><span>Not observed</span></div>'
+    )
+
+
 def render_dashboard(
     store: EventStore,
     site_name: str,
@@ -113,6 +179,7 @@ def render_dashboard(
     )
     availability = f"{summary.availability_percent:.2f}%" if summary.observed_seconds else "--"
     updated = end.astimezone(tz).strftime("%b %d, %Y %H:%M:%S %Z")
+    pattern = pattern_chart(context_events, start, end, tz)
 
     return f"""<!doctype html>
 <html lang="en">
@@ -148,6 +215,11 @@ def render_dashboard(
     .key::before {{ content:""; display:inline-block; width:8px; height:8px; margin-right:5px; border-radius:2px; background:var(--green); }} .key.off::before {{ background:var(--red); }}
     .timeline {{ display:block; width:100%; height:auto; overflow:visible; }} .timeline text {{ fill:var(--muted); font-size:11px; }}
     .empty {{ height:72px; display:grid; place-items:center; color:var(--muted); background:#f7f9f8; }}
+    .heatmap-wrap {{ overflow-x:auto; padding-bottom:4px; }} .heatmap {{ border-collapse:separate; border-spacing:3px; width:100%; min-width:820px; table-layout:fixed; }}
+    .heatmap th {{ padding:2px 0; border:0; text-align:center; font-size:10px; font-weight:550; color:var(--muted); }} .heatmap .weekday {{ width:38px; text-align:left; }}
+    .heat {{ height:27px; padding:0; border:0; border-radius:2px; background:#dfe8e3; }} .heat-0 {{ background:#d7e7df; }} .heat-1 {{ background:#f2c7ae; }} .heat-2 {{ background:#e99772; }} .heat-3 {{ background:#d75c48; }} .heat-4 {{ background:#9e2f2b; }} .no-data {{ background:#edf0ee; background-image:repeating-linear-gradient(135deg,transparent,transparent 3px,#dfe4e1 3px,#dfe4e1 4px); }}
+    .heat-legend {{ display:flex; align-items:center; justify-content:flex-end; gap:5px; margin-top:10px; color:var(--muted); font-size:11px; }} .heat-legend i {{ display:block; width:18px; height:12px; border-radius:2px; }} .heat-legend .no-data {{ margin-left:12px; }}
+    .sr-only {{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }}
     .table-wrap {{ overflow-x:auto; }} table {{ border-collapse:collapse; width:100%; min-width:640px; }}
     th {{ color:var(--muted); font-size:11px; text-align:left; text-transform:uppercase; font-weight:650; }} th,td {{ padding:10px 8px; border-bottom:1px solid #edf0ee; }} tbody tr:last-child td {{ border-bottom:0; }}
     .event-dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--green); margin-right:8px; }} .event-dot.off {{ background:var(--red); }} .source {{ color:var(--muted); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; }}
@@ -167,6 +239,7 @@ def render_dashboard(
       <div class="metric"><div class="metric-label">Outages detected</div><div class="metric-value">{summary.outage_count}</div><div class="metric-detail">Transitions in selected period</div></div>
     </div>
     <section><div class="section-head"><h2>Availability timeline</h2><div class="legend"><span class="key">Available</span><span class="key off">Outage</span></div></div>{timeline_svg(context_events, start, end)}</section>
+    <section><div class="section-head"><h2>Outage pattern by day and hour</h2><span class="subtitle">Local time · selected period</span></div>{pattern}</section>
     <section><div class="section-head"><h2>Event history</h2><span class="subtitle">Latest 50 events</span></div><div class="table-wrap"><table><thead><tr><th>State</th><th>Local time</th><th>Type</th><th>Source</th></tr></thead><tbody>{table_body}</tbody></table></div></section>
     <footer>Last refreshed {html.escape(updated)} · Refreshes every 30 seconds</footer>
   </main>
