@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-import csv
 import base64
 import binascii
+import csv
 import hmac
 import html
 import io
 import logging
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.cookies import SimpleCookie
+from time import time
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -18,6 +20,8 @@ from .storage import EventStore
 
 
 PERIODS = ("24h", "7d", "30d", "12w")
+SESSION_COOKIE = "grid_session"
+SESSION_SECONDS = 30 * 24 * 60 * 60
 
 
 def authorization_valid(header: str | None, username: str, password: str) -> bool:
@@ -30,6 +34,76 @@ def authorization_valid(header: str | None, username: str, password: str) -> boo
     except (binascii.Error, UnicodeDecodeError):
         return False
     return hmac.compare_digest(supplied, f"{username}:{password}")
+
+
+def create_session_token(
+    username: str, password: str, now: float | None = None
+) -> str:
+    expires = int(now if now is not None else time()) + SESSION_SECONDS
+    payload = f"{username}\n{expires}".encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    signature = hmac.new(password.encode("utf-8"), payload, "sha256").hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def session_valid(
+    cookie_header: str | None,
+    username: str,
+    password: str,
+    now: float | None = None,
+) -> bool:
+    if not username and not password:
+        return True
+    if not cookie_header:
+        return False
+    try:
+        cookies = SimpleCookie(cookie_header)
+        token = cookies[SESSION_COOKIE].value
+        encoded, supplied_signature = token.split(".", 1)
+        padding = "=" * (-len(encoded) % 4)
+        payload = base64.urlsafe_b64decode(encoded + padding)
+        stored_username, expires_text = payload.decode("utf-8").rsplit("\n", 1)
+        expected_signature = hmac.new(password.encode("utf-8"), payload, "sha256").hexdigest()
+        current_time = now if now is not None else time()
+        return (
+            hmac.compare_digest(stored_username, username)
+            and int(expires_text) >= current_time
+            and hmac.compare_digest(supplied_signature, expected_signature)
+        )
+    except (KeyError, ValueError, binascii.Error, UnicodeDecodeError):
+        return False
+
+
+def session_cookie(username: str, password: str, *, secure: bool) -> str:
+    attributes = [
+        f"{SESSION_COOKIE}={create_session_token(username, password)}",
+        "Path=/",
+        f"Max-Age={SESSION_SECONDS}",
+        "HttpOnly",
+        "SameSite=Strict",
+    ]
+    if secure:
+        attributes.append("Secure")
+    return "; ".join(attributes)
+
+
+def render_login(site_name: str, *, invalid: bool = False) -> str:
+    error = '<div class="error" role="alert">Incorrect username or password</div>' if invalid else ""
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in | {html.escape(site_name)}</title>
+  <style>
+    :root {{ color-scheme:light; --ink:#18221e; --muted:#66736d; --line:#d5ddd8; --green:#176b4b; --page:#f1f4f2; }}
+    * {{ box-sizing:border-box; }} body {{ margin:0; min-height:100vh; display:grid; place-items:center; padding:20px; background:var(--page); color:var(--ink); font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; letter-spacing:0; }}
+    main {{ width:min(100%,360px); }} .brand {{ display:flex; align-items:center; gap:10px; margin-bottom:24px; }} .mark {{ width:11px; height:11px; border-radius:50%; background:#48b77e; box-shadow:0 0 0 4px #48b77e22; }} h1 {{ margin:0; font-size:20px; letter-spacing:0; }} .subtitle {{ color:var(--muted); font-size:12px; }}
+    form {{ padding:24px; background:#fff; border:1px solid var(--line); border-radius:6px; }} h2 {{ margin:0 0 18px; font-size:16px; letter-spacing:0; }} label {{ display:block; margin:14px 0 5px; color:var(--muted); font-size:12px; font-weight:600; }} input {{ width:100%; height:42px; padding:0 11px; border:1px solid #bfcac4; border-radius:4px; background:#fff; color:var(--ink); font:inherit; outline:none; }} input:focus {{ border-color:var(--green); box-shadow:0 0 0 3px #176b4b18; }} button {{ width:100%; height:42px; margin-top:20px; border:0; border-radius:4px; background:var(--green); color:#fff; font:inherit; font-weight:700; cursor:pointer; }} button:hover {{ background:#12583e; }} .error {{ padding:9px 10px; margin-bottom:14px; border-left:3px solid #c83d35; background:#fff1ef; color:#8c2924; font-size:12px; }}
+  </style>
+</head>
+<body><main><div class="brand"><span class="mark"></span><div><h1>{html.escape(site_name)}</h1><div class="subtitle">Electricity grid monitoring</div></div></div><form method="post" action="/login"><h2>Sign in</h2>{error}<label for="username">Username</label><input id="username" name="username" autocomplete="username" required autofocus><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button type="submit">Sign in</button></form></main></body>
+</html>"""
 
 
 def format_duration(seconds: float) -> str:
@@ -167,8 +241,16 @@ def render_dashboard(
     recent = store.list_events(start=start, end=end, limit=50, descending=True)
     tz = display_timezone(timezone_name)
     current = summary.current_state
+    latest = store.latest()
     status_class = "online" if current is PowerState.ON else "offline" if current else "unknown"
-    status_label = "Grid available" if current is PowerState.ON else "Power outage" if current else "Unknown"
+    status_label = "Power available" if current is PowerState.ON else "Outage active" if current else "Status unknown"
+    if latest:
+        status_duration = format_duration((end - latest.timestamp).total_seconds())
+        status_since = latest.timestamp.astimezone(tz).strftime("%b %d, %Y %H:%M %Z")
+        status_since_label = f"Since {status_since}"
+    else:
+        status_duration = "--"
+        status_since_label = "Waiting for first observation"
 
     period_links = "".join(
         f'<a class="period {"active" if item == period else ""}" href="/?period={item}">{item}</a>'
@@ -209,17 +291,18 @@ def render_dashboard(
     body {{ margin:0; background:var(--page); color:var(--ink); font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; letter-spacing:0; }}
     header {{ background:#17241e; color:#fff; }}
     .header-inner,.content {{ width:min(1180px,calc(100% - 32px)); margin:auto; }}
-    .header-inner {{ min-height:70px; display:flex; align-items:center; justify-content:space-between; gap:20px; }}
+    .header-inner {{ min-height:82px; display:flex; align-items:center; justify-content:space-between; gap:20px; }}
     h1 {{ margin:0; font-size:20px; font-weight:650; letter-spacing:0; }}
     .subtitle {{ color:#b8c5bf; font-size:12px; }}
-    .status {{ display:inline-flex; align-items:center; gap:8px; font-weight:650; }}
-    .status::before {{ content:""; width:9px; height:9px; border-radius:50%; background:#98a39e; box-shadow:0 0 0 3px #ffffff18; }}
+    .status {{ display:grid; grid-template-columns:auto auto; grid-template-areas:"dot label" "duration since"; align-items:center; column-gap:8px; min-width:250px; padding-left:20px; border-left:1px solid #ffffff26; }}
+    .status::before {{ grid-area:dot; content:""; width:9px; height:9px; border-radius:50%; background:#98a39e; box-shadow:0 0 0 3px #ffffff18; }}
     .status.online::before {{ background:#56d292; }} .status.offline::before {{ background:#ff7066; }}
+    .status-label {{ grid-area:label; color:#dbe4e0; font-size:11px; font-weight:700; text-transform:uppercase; }} .status-duration {{ grid-area:duration; margin-top:2px; font-size:25px; line-height:1; font-weight:700; }} .status-since {{ grid-area:since; align-self:end; color:#b8c5bf; font-size:11px; white-space:nowrap; }}
     .toolbar {{ display:flex; justify-content:space-between; align-items:center; gap:16px; padding:24px 0 16px; }}
     .periods {{ display:flex; border:1px solid var(--line); background:#fff; border-radius:6px; overflow:hidden; }}
     .period {{ padding:7px 12px; color:var(--muted); text-decoration:none; border-right:1px solid var(--line); }}
     .period:last-child {{ border:0; }} .period.active {{ background:#243f33; color:#fff; }}
-    .export {{ color:var(--blue); font-weight:600; text-decoration:none; }}
+    .toolbar-actions {{ display:flex; align-items:center; gap:16px; }} .export,.logout {{ color:var(--blue); font-weight:600; text-decoration:none; }} .logout {{ color:var(--muted); font-weight:500; }}
     .metrics {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border:1px solid var(--line); border-radius:6px; background:var(--surface); }}
     .metric {{ padding:18px 20px; border-right:1px solid var(--line); min-width:0; }} .metric:last-child {{ border:0; }}
     .metric-label {{ color:var(--muted); font-size:12px; }} .metric-value {{ margin-top:3px; font-size:25px; font-weight:680; white-space:nowrap; }}
@@ -239,14 +322,14 @@ def render_dashboard(
     th {{ color:var(--muted); font-size:11px; text-align:left; text-transform:uppercase; font-weight:650; }} th,td {{ padding:10px 8px; border-bottom:1px solid #edf0ee; }} tbody tr:last-child td {{ border-bottom:0; }}
     .event-dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--green); margin-right:8px; }} .event-dot.off {{ background:var(--red); }} .source {{ color:var(--muted); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; }}
     .empty-cell {{ text-align:center; color:var(--muted); padding:30px; }} footer {{ color:var(--muted); font-size:11px; padding:16px 0 28px; }}
-    @media (max-width:760px) {{ .header-inner {{ min-height:64px; }} .metrics {{ grid-template-columns:1fr 1fr; }} .metric:nth-child(2) {{ border-right:0; }} .metric:nth-child(-n+2) {{ border-bottom:1px solid var(--line); }} .toolbar {{ align-items:flex-end; }} .metric-value {{ font-size:21px; }} }}
-    @media (max-width:440px) {{ .header-inner,.content {{ width:min(100% - 20px,1180px); }} .subtitle {{ display:none; }} .period {{ padding:7px 9px; }} .export {{ font-size:0; }} .export::after {{ content:"CSV"; font-size:12px; }} .metric {{ padding:14px; }} section {{ padding:14px; }} }}
+    @media (max-width:760px) {{ .header-inner {{ min-height:76px; }} .metrics {{ grid-template-columns:1fr 1fr; }} .metric:nth-child(2) {{ border-right:0; }} .metric:nth-child(-n+2) {{ border-bottom:1px solid var(--line); }} .toolbar {{ align-items:flex-end; }} .metric-value {{ font-size:21px; }} }}
+    @media (max-width:440px) {{ .header-inner,.content {{ width:min(100% - 20px,1180px); }} .subtitle {{ display:none; }} .status {{ min-width:0; padding-left:12px; column-gap:6px; }} .status-duration {{ font-size:21px; }} .status-since {{ max-width:128px; white-space:normal; line-height:1.2; }} .period {{ padding:7px 9px; }} .export {{ font-size:0; }} .export::after {{ content:"CSV"; font-size:12px; }} .metric {{ padding:14px; }} section {{ padding:14px; }} }}
   </style>
 </head>
 <body>
-  <header><div class="header-inner"><div><h1>{html.escape(site_name)}</h1><div class="subtitle">Electricity grid monitoring</div></div><div class="status {status_class}">{status_label}</div></div></header>
+  <header><div class="header-inner"><div><h1>{html.escape(site_name)}</h1><div class="subtitle">Electricity grid monitoring</div></div><div class="status {status_class}"><span class="status-label">{status_label}</span><strong class="status-duration">{status_duration}</strong><span class="status-since">{html.escape(status_since_label)}</span></div></div></header>
   <main class="content">
-    <div class="toolbar"><nav class="periods" aria-label="Report period">{period_links}</nav><a class="export" href="/events.csv?period={period}">Download CSV</a></div>
+    <div class="toolbar"><nav class="periods" aria-label="Report period">{period_links}</nav><div class="toolbar-actions"><a class="export" href="/events.csv?period={period}">Download CSV</a><a class="logout" href="/logout">Sign out</a></div></div>
     <div class="metrics">
       <div class="metric"><div class="metric-label">Availability</div><div class="metric-value">{availability}</div><div class="metric-detail">{observed_note}</div></div>
       <div class="metric"><div class="metric-label">Power available</div><div class="metric-value">{format_duration(summary.online_seconds)}</div><div class="metric-detail">Within observed time</div></div>
@@ -282,6 +365,11 @@ def make_handler(
     password: str = "",
 ):
     class DashboardHandler(BaseHTTPRequestHandler):
+        def is_authenticated(self) -> bool:
+            return authorization_valid(
+                self.headers.get("Authorization"), username, password
+            ) or session_valid(self.headers.get("Cookie"), username, password)
+
         def do_GET(self) -> None:
             request = urlparse(self.path)
             query = parse_qs(request.query)
@@ -290,16 +378,25 @@ def make_handler(
             if request.path == "/favicon.ico":
                 self.send_content(204, "image/x-icon", b"")
                 return
-            if request.path != "/health" and not authorization_valid(
-                self.headers.get("Authorization"), username, password
-            ):
-                body = b"Authentication required\n"
-                self.send_response(401)
-                self.send_header("WWW-Authenticate", 'Basic realm="Grid Monitor", charset="UTF-8"')
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.send_common_headers(len(body))
-                self.end_headers()
-                self.wfile.write(body)
+            if request.path == "/health":
+                self.send_content(200, "text/plain; charset=utf-8", b"ok\n")
+                return
+            if request.path == "/logout":
+                self.send_redirect(
+                    "/login",
+                    f"{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict",
+                )
+                return
+            if request.path == "/login":
+                if self.is_authenticated():
+                    self.send_redirect("/")
+                else:
+                    self.send_content(
+                        200, "text/html; charset=utf-8", render_login(site_name).encode("utf-8")
+                    )
+                return
+            if not self.is_authenticated():
+                self.send_redirect("/login")
                 return
             if request.path == "/":
                 body = render_dashboard(store, site_name, period, timezone_name).encode("utf-8")
@@ -314,10 +411,40 @@ def make_handler(
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            if request.path == "/health":
-                self.send_content(200, "text/plain; charset=utf-8", b"ok\n")
-                return
             self.send_content(404, "text/plain; charset=utf-8", b"Not found\n")
+
+        def do_POST(self) -> None:
+            if urlparse(self.path).path != "/login":
+                self.send_content(404, "text/plain; charset=utf-8", b"Not found\n")
+                return
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                content_length = 0
+            if not 0 < content_length <= 4096:
+                self.send_content(400, "text/plain; charset=utf-8", b"Invalid request\n")
+                return
+            fields = parse_qs(self.rfile.read(content_length).decode("utf-8", errors="replace"))
+            supplied_username = fields.get("username", [""])[0]
+            supplied_password = fields.get("password", [""])[0]
+            credentials_match = hmac.compare_digest(
+                f"{supplied_username}:{supplied_password}", f"{username}:{password}"
+            )
+            if username and password and credentials_match:
+                forwarded_proto = self.headers.get("X-Forwarded-Proto", "")
+                secure = forwarded_proto.split(",", 1)[0].strip().lower() == "https"
+                self.send_redirect("/", session_cookie(username, password, secure=secure))
+                return
+            body = render_login(site_name, invalid=True).encode("utf-8")
+            self.send_content(401, "text/html; charset=utf-8", body)
+
+        def send_redirect(self, location: str, cookie: str | None = None) -> None:
+            self.send_response(303)
+            self.send_header("Location", location)
+            if cookie:
+                self.send_header("Set-Cookie", cookie)
+            self.send_common_headers(0)
+            self.end_headers()
 
         def send_content(self, status: int, content_type: str, body: bytes) -> None:
             self.send_response(status)
@@ -331,7 +458,7 @@ def make_handler(
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Frame-Options", "DENY")
-            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
 
         def log_message(self, message: str, *args: object) -> None:
             logging.info("Dashboard: " + message, *args)

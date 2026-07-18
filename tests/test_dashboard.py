@@ -5,9 +5,11 @@ from pathlib import Path
 
 from grid_monitor.dashboard import (
     authorization_valid,
+    create_session_token,
     csv_response,
     outage_pattern,
     render_dashboard,
+    session_valid,
     timeline_svg,
 )
 from grid_monitor.models import PowerEvent, PowerState
@@ -22,6 +24,14 @@ class DashboardTests(unittest.TestCase):
         self.assertTrue(authorization_valid(f"Basic {valid}", "reporter", "test-password"))
         self.assertFalse(authorization_valid("Basic invalid", "reporter", "test-password"))
         self.assertFalse(authorization_valid(None, "reporter", "test-password"))
+
+    def test_signed_session_cookie_expires_and_rejects_tampering(self) -> None:
+        token = create_session_token("reporter", "test-password", now=1_000)
+        cookie = f"grid_session={token}"
+
+        self.assertTrue(session_valid(cookie, "reporter", "test-password", now=1_001))
+        self.assertFalse(session_valid(cookie, "reporter", "wrong-password", now=1_001))
+        self.assertFalse(session_valid(cookie, "reporter", "test-password", now=3_000_000))
 
     def test_dashboard_renders_summary_events_and_escaped_site_name(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -39,6 +49,8 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("Outage", page)
             self.assertIn("/events.csv?period=24h", page)
             self.assertIn("Outage pattern by day and hour", page)
+            self.assertIn('<strong class="status-duration">1h 0m</strong>', page)
+            self.assertIn("Since Jan 01, 2026 23:00 UTC", page)
 
     def test_csv_response_contains_period_events(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
