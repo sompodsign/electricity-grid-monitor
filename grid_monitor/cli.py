@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import Settings
+from .dashboard import serve_dashboard
 from .emailer import send_notification
 from .models import PowerEvent, PowerState
 from .monitor import GridMonitor, run_until_signal
@@ -42,6 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--period", default="30d", help="period such as 24h, 7d, or 4w")
     export.add_argument("--output", type=Path, default=Path("reports/grid-events.csv"))
 
+    serve = commands.add_parser("serve", help="serve the local reporting dashboard")
+    serve.add_argument("--host", default="127.0.0.1", help="interface to bind (default: localhost)")
+    serve.add_argument("--port", type=port_number, default=8090)
+
     commands.add_parser("test-email", help="send a sample notification using SMTP settings")
     return parser
 
@@ -50,6 +55,13 @@ def positive_int(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
+def port_number(value: str) -> int:
+    parsed = int(value)
+    if not 1 <= parsed <= 65535:
+        raise argparse.ArgumentTypeError("must be between 1 and 65535")
     return parsed
 
 
@@ -137,6 +149,10 @@ def run_command(args: argparse.Namespace, settings: Settings) -> int:
         event = PowerEvent(datetime.now(timezone.utc), PowerState.ON, "test", "transition")
         send_notification(event, settings)
         print(f"Test email sent to {settings.notification_to_email}")
+        return 0
+
+    if args.command == "serve":
+        serve_dashboard(store, settings.site_name, settings.timezone, args.host, args.port)
         return 0
 
     start, end = parse_period(args.period)

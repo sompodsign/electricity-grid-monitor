@@ -11,6 +11,7 @@ On this laptop the auto-detected source is `/sys/class/power_supply/AC/online`.
 - Keeps durable logs in SQLite with UTC timestamps
 - Shows live status, history, outage count, and availability percentage
 - Exports raw events to CSV and generates timeline/daily availability plots
+- Serves a responsive local reporting dashboard without extra dependencies
 - Enables or disables email with `NOTIFICATION_ENABLED`
 - Sends multipart plain-text and HTML email through any SMTP provider
 - Runs continuously as a hardened systemd service
@@ -73,6 +74,17 @@ Query and report the stored data:
 .venv/bin/grid-monitor plot --period 7d --output reports/week.png
 ```
 
+Explore the live report in a browser:
+
+```bash
+PYTHONPATH=. python3 -m grid_monitor serve
+```
+
+Open <http://127.0.0.1:8090>. The dashboard shows availability, outage duration, an interactive
+period selector, the event timeline, recent transitions, and CSV downloads. It refreshes every
+30 seconds. Manual runs are accessible only from this laptop by default; add `--host 0.0.0.0`
+to expose them on the local network.
+
 Supported periods use hours, days, or weeks, such as `12h`, `7d`, and `4w`.
 
 Test SMTP after enabling and configuring notifications:
@@ -83,13 +95,18 @@ Test SMTP after enabling and configuring notifications:
 
 ## Run At Startup
 
-The installer creates and starts `/etc/systemd/system/grid-monitor.service`. Run the script as
-your regular user; it requests `sudo` only for system service operations.
+The installer creates and starts both `/etc/systemd/system/grid-monitor.service` and
+`/etc/systemd/system/grid-monitor-dashboard.service`. The monitor and dashboard start at boot
+and restart automatically after a failure. The installed dashboard listens on all network
+interfaces at port `8090`, so any device on the same network can open
+`http://LAPTOP_IP_ADDRESS:8090`. It has no login screen; expose it only on a trusted local network.
+Run the script as your regular user; it requests `sudo` only for system service operations.
 
 ```bash
 chmod +x scripts/install-service.sh
 ./scripts/install-service.sh
 sudo systemctl status grid-monitor
+sudo systemctl status grid-monitor-dashboard
 sudo journalctl -u grid-monitor -f
 ```
 
