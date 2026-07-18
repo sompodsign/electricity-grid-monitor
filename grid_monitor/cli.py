@@ -152,7 +152,15 @@ def run_command(args: argparse.Namespace, settings: Settings) -> int:
         return 0
 
     if args.command == "serve":
-        serve_dashboard(store, settings.site_name, settings.timezone, args.host, args.port)
+        serve_dashboard(
+            store,
+            settings.site_name,
+            settings.timezone,
+            args.host,
+            args.port,
+            settings.dashboard_username,
+            settings.dashboard_password,
+        )
         return 0
 
     start, end = parse_period(args.period)

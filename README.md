@@ -99,8 +99,9 @@ The installer creates and starts both `/etc/systemd/system/grid-monitor.service`
 `/etc/systemd/system/grid-monitor-dashboard.service`. The monitor and dashboard start at boot
 and restart automatically after a failure. The installed dashboard listens on all network
 interfaces at port `8090`, so any device on the same network can open
-`http://LAPTOP_IP_ADDRESS:8090`. It has no login screen; expose it only on a trusted local network.
-Run the script as your regular user; it requests `sudo` only for system service operations.
+`http://LAPTOP_IP_ADDRESS:8090`. Configure `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD` before
+exposing it outside a trusted local network. Run the script as your regular user; it requests
+`sudo` only for system service operations.
 
 ```bash
 chmod +x scripts/install-service.sh
@@ -116,6 +117,30 @@ Restart the service after changing `.env`:
 sudo systemctl restart grid-monitor
 ```
 
+If system-wide service installation is unavailable, install only the dashboard for the current
+Linux user without sudo:
+
+```bash
+chmod +x scripts/install-user-dashboard.sh
+./scripts/install-user-dashboard.sh
+systemctl --user status grid-monitor-dashboard-user
+```
+
+## Cloudflare Tunnel
+
+The optional Cloudflare connector publishes the local dashboard through an outbound tunnel. Its
+user service restarts automatically and does not require router port forwarding. Put the named
+tunnel UUID in `CLOUDFLARE_TUNNEL_ID` inside `.env`, then run:
+
+```bash
+chmod +x scripts/install-cloudflare-tunnel.sh
+./scripts/install-cloudflare-tunnel.sh
+systemctl --user status cloudflare-grid-tunnel
+```
+
+The Cloudflare DNS route and Access application must point the chosen public hostname to the
+`electricity-grid-monitor` tunnel and `http://127.0.0.1:8090` origin.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -125,6 +150,8 @@ sudo systemctl restart grid-monitor
 | `POWER_SUPPLY_PATH` | auto-detected | Supply directory or `online` file |
 | `SITE_NAME` | `Home Grid` | Location shown in reports and email |
 | `TZ` | system timezone | Email display timezone |
+| `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD` | empty | Optional HTTP Basic authentication |
+| `CLOUDFLARE_TUNNEL_ID` | empty | Optional named Cloudflare Tunnel UUID |
 | `NOTIFICATION_ENABLED` | `false` | Email feature flag |
 | `SMTP_HOST`, `SMTP_PORT` | empty, `587` | SMTP endpoint |
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | empty | Optional SMTP authentication |

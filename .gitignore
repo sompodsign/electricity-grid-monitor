@@ -1,4 +1,5 @@
 .env
+bin/cloudflared
 .venv/
 __pycache__/
 *.py[cod]
@@ -7,4 +8,3 @@ data/*.db
 data/*.db-*
 reports/*.csv
 reports/*.png
-

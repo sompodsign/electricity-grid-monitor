@@ -19,7 +19,8 @@ def settings(database_path: Path, **overrides: object) -> Settings:
         "smtp_use_ssl": False,
         "site_name": "Test Grid",
         "timezone": "UTC",
+        "dashboard_username": "",
+        "dashboard_password": "",
     }
     values.update(overrides)
     return Settings(**values)  # type: ignore[arg-type]
-

@@ -57,6 +57,8 @@ class Settings:
     smtp_use_ssl: bool
     site_name: str
     timezone: str
+    dashboard_username: str
+    dashboard_password: str
 
     @classmethod
     def from_env(cls, env_file: Path | None = None) -> "Settings":
@@ -80,6 +82,8 @@ class Settings:
             smtp_use_ssl=env_bool("SMTP_USE_SSL", False),
             site_name=os.getenv("SITE_NAME", "Home Grid").strip() or "Home Grid",
             timezone=os.getenv("TZ", "").strip(),
+            dashboard_username=os.getenv("DASHBOARD_USERNAME", "").strip(),
+            dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
         )
         settings.validate()
         return settings
@@ -103,4 +107,7 @@ class Settings:
                     "Notifications are enabled, but these settings are missing: "
                     + ", ".join(missing)
                 )
-
+        if bool(self.dashboard_username) != bool(self.dashboard_password):
+            raise ValueError(
+                "DASHBOARD_USERNAME and DASHBOARD_PASSWORD must both be set or both be empty"
+            )

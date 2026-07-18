@@ -1,0 +1,17 @@
+[Unit]
+Description=Cloudflare Tunnel for Electricity Grid Dashboard
+After=network-online.target grid-monitor-dashboard-user.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Desktop/projects/electricity-grid-monitor
+EnvironmentFile=%h/Desktop/projects/electricity-grid-monitor/.env
+ExecStart=%h/Desktop/projects/electricity-grid-monitor/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8090 run ${CLOUDFLARE_TUNNEL_ID}
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

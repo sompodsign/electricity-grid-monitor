@@ -3,12 +3,26 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from grid_monitor.dashboard import csv_response, outage_pattern, render_dashboard, timeline_svg
+from grid_monitor.dashboard import (
+    authorization_valid,
+    csv_response,
+    outage_pattern,
+    render_dashboard,
+    timeline_svg,
+)
 from grid_monitor.models import PowerEvent, PowerState
 from grid_monitor.storage import EventStore
 
 
 class DashboardTests(unittest.TestCase):
+    def test_basic_authorization(self) -> None:
+        import base64
+
+        valid = base64.b64encode(b"reporter:test-password").decode("ascii")
+        self.assertTrue(authorization_valid(f"Basic {valid}", "reporter", "test-password"))
+        self.assertFalse(authorization_valid("Basic invalid", "reporter", "test-password"))
+        self.assertFalse(authorization_valid(None, "reporter", "test-password"))
+
     def test_dashboard_renders_summary_events_and_escaped_site_name(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = EventStore(Path(directory) / "events.db")

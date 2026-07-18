@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import csv
+import base64
+import binascii
+import hmac
 import html
 import io
 import logging
@@ -15,6 +18,18 @@ from .storage import EventStore
 
 
 PERIODS = ("24h", "7d", "30d", "12w")
+
+
+def authorization_valid(header: str | None, username: str, password: str) -> bool:
+    if not username and not password:
+        return True
+    if not header or not header.startswith("Basic "):
+        return False
+    try:
+        supplied = base64.b64decode(header[6:], validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    return hmac.compare_digest(supplied, f"{username}:{password}")
 
 
 def format_duration(seconds: float) -> str:
@@ -259,13 +274,33 @@ def csv_response(store: EventStore, period: str, now: datetime | None = None) ->
     return output.getvalue().encode("utf-8")
 
 
-def make_handler(store: EventStore, site_name: str, timezone_name: str):
+def make_handler(
+    store: EventStore,
+    site_name: str,
+    timezone_name: str,
+    username: str = "",
+    password: str = "",
+):
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             request = urlparse(self.path)
             query = parse_qs(request.query)
             period = query.get("period", ["7d"])[0]
             period = period if period in PERIODS else "7d"
+            if request.path == "/favicon.ico":
+                self.send_content(204, "image/x-icon", b"")
+                return
+            if request.path != "/health" and not authorization_valid(
+                self.headers.get("Authorization"), username, password
+            ):
+                body = b"Authentication required\n"
+                self.send_response(401)
+                self.send_header("WWW-Authenticate", 'Basic realm="Grid Monitor", charset="UTF-8"')
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_common_headers(len(body))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if request.path == "/":
                 body = render_dashboard(store, site_name, period, timezone_name).encode("utf-8")
                 self.send_content(200, "text/html; charset=utf-8", body)
@@ -310,8 +345,12 @@ def serve_dashboard(
     timezone_name: str,
     host: str = "127.0.0.1",
     port: int = 8090,
+    username: str = "",
+    password: str = "",
 ) -> None:
-    server = ThreadingHTTPServer((host, port), make_handler(store, site_name, timezone_name))
+    server = ThreadingHTTPServer(
+        (host, port), make_handler(store, site_name, timezone_name, username, password)
+    )
     logging.info("Reporting dashboard available at http://%s:%s", host, port)
     try:
         server.serve_forever()
