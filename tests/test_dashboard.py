@@ -9,6 +9,7 @@ from grid_monitor.dashboard import (
     csv_response,
     outage_pattern,
     render_dashboard,
+    session_cookie,
     session_valid,
     timeline_svg,
 )
@@ -33,6 +34,14 @@ class DashboardTests(unittest.TestCase):
         self.assertFalse(session_valid(cookie, "reporter", "wrong-password", now=1_001))
         self.assertFalse(session_valid(cookie, "reporter", "test-password", now=3_000_000))
 
+        persistent = session_cookie(
+            "reporter", "test-password", secure=True, now=1_000
+        )
+        self.assertIn("Max-Age=2592000", persistent)
+        self.assertIn("Expires=Sat, 31 Jan 1970 00:16:40 GMT", persistent)
+        self.assertIn("Secure", persistent)
+        self.assertIn("Priority=High", persistent)
+
     def test_dashboard_renders_summary_events_and_escaped_site_name(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = EventStore(Path(directory) / "events.db")
@@ -42,7 +51,9 @@ class DashboardTests(unittest.TestCase):
             store.add(PowerEvent(now - timedelta(hours=2), PowerState.OFF, "AC"))
             store.add(PowerEvent(now - timedelta(hours=1), PowerState.ON, "AC"))
 
-            page = render_dashboard(store, "Home <Grid>", "24h", "UTC", now)
+            page = render_dashboard(
+                store, "Home <Grid>", "24h", "UTC", now, Path(directory)
+            )
 
             self.assertIn("Home &lt;Grid&gt;", page)
             self.assertIn("75.00%", page)

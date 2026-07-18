@@ -59,6 +59,7 @@ class Settings:
     timezone: str
     dashboard_username: str
     dashboard_password: str
+    battery_warning_percent: int
 
     @classmethod
     def from_env(cls, env_file: Path | None = None) -> "Settings":
@@ -84,6 +85,7 @@ class Settings:
             timezone=os.getenv("TZ", "").strip(),
             dashboard_username=os.getenv("DASHBOARD_USERNAME", "").strip(),
             dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
+            battery_warning_percent=int(os.getenv("BATTERY_WARNING_PERCENT", "15")),
         )
         settings.validate()
         return settings
@@ -111,3 +113,5 @@ class Settings:
             raise ValueError(
                 "DASHBOARD_USERNAME and DASHBOARD_PASSWORD must both be set or both be empty"
             )
+        if not 1 <= self.battery_warning_percent <= 99:
+            raise ValueError("BATTERY_WARNING_PERCENT must be between 1 and 99")

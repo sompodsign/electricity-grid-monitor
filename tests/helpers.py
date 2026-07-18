@@ -21,6 +21,7 @@ def settings(database_path: Path, **overrides: object) -> Settings:
         "timezone": "UTC",
         "dashboard_username": "",
         "dashboard_password": "",
+        "battery_warning_percent": 15,
     }
     values.update(overrides)
     return Settings(**values)  # type: ignore[arg-type]

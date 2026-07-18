@@ -8,12 +8,15 @@ import html
 import io
 import logging
 from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
+from pathlib import Path
 from time import time
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .battery import BatteryTelemetry, read_battery_telemetry
 from .models import PowerEvent, PowerState
 from .reporting import events_with_context, parse_period, summarize
 from .storage import EventStore
@@ -74,13 +77,25 @@ def session_valid(
         return False
 
 
-def session_cookie(username: str, password: str, *, secure: bool) -> str:
+def session_cookie(
+    username: str,
+    password: str,
+    *,
+    secure: bool,
+    now: float | None = None,
+) -> str:
+    current_time = now if now is not None else time()
+    expires = datetime.fromtimestamp(
+        current_time + SESSION_SECONDS, timezone.utc
+    )
     attributes = [
-        f"{SESSION_COOKIE}={create_session_token(username, password)}",
+        f"{SESSION_COOKIE}={create_session_token(username, password, current_time)}",
         "Path=/",
         f"Max-Age={SESSION_SECONDS}",
+        f"Expires={format_datetime(expires, usegmt=True)}",
         "HttpOnly",
         "SameSite=Strict",
+        "Priority=High",
     ]
     if secure:
         attributes.append("Secure")
@@ -226,12 +241,67 @@ def pattern_chart(events: list[PowerEvent], start: datetime, end: datetime, tz) 
     )
 
 
+def battery_panel(
+    telemetry: BatteryTelemetry | None,
+    tz,
+    warning_percent: int,
+) -> str:
+    if telemetry is None:
+        return ""
+
+    percent = telemetry.percent
+    level = max(0.0, min(100.0, percent or 0.0))
+    warning = percent is not None and percent <= warning_percent
+    state_class = " battery-low" if warning else ""
+    percent_label = f"{percent:.0f}%" if percent is not None else "--"
+    if telemetry.runtime_seconds is not None and telemetry.cutoff_at is not None:
+        runtime_label = f"{format_duration(telemetry.runtime_seconds)} remaining"
+        cutoff = telemetry.cutoff_at.astimezone(tz).strftime("%b %d, %Y %H:%M %Z")
+        estimate = f"Estimated cutoff {cutoff} if draw stays near {telemetry.power_w:.1f} W"
+    elif telemetry.discharging:
+        runtime_label = "Runtime unavailable"
+        estimate = f"{telemetry.energy_now_wh:.1f} Wh stored; discharge rate unavailable"
+    else:
+        runtime_label = "On external power"
+        estimate = f"{telemetry.energy_now_wh:.1f} Wh stored"
+
+    packs = []
+    for pack in telemetry.packs:
+        pack_percent = f"{pack.percent:.0f}%" if pack.percent is not None else "--"
+        health = (
+            f" · {pack.health_percent:.0f}% health"
+            if pack.health_percent is not None
+            else ""
+        )
+        packs.append(
+            '<div class="battery-pack">'
+            f'<strong>{html.escape(pack.name)} {pack_percent}</strong>'
+            f'<span>{html.escape(pack.status)}{health}</span></div>'
+        )
+    warning_text = (
+        f'<span class="battery-warning">Below {warning_percent}% warning level</span>'
+        if warning
+        else ""
+    )
+    return (
+        f'<section class="server-status{state_class}">'
+        '<div class="server-summary"><div class="battery-icon" aria-hidden="true">'
+        f'<i style="width:{level:.1f}%"></i></div><div><div class="metric-label">Server battery</div>'
+        f'<div class="battery-value">{percent_label}</div></div></div>'
+        f'<div class="runtime"><strong>{html.escape(runtime_label)}</strong>'
+        f'<span>{html.escape(estimate)}</span>{warning_text}</div>'
+        f'<div class="battery-packs">{"".join(packs)}</div></section>'
+    )
+
+
 def render_dashboard(
     store: EventStore,
     site_name: str,
     period: str,
     timezone_name: str,
     now: datetime | None = None,
+    battery_root: Path = Path("/sys/class/power_supply"),
+    battery_warning_percent: int = 15,
 ) -> str:
     if period not in PERIODS:
         period = "7d"
@@ -277,6 +347,9 @@ def render_dashboard(
     availability = f"{summary.availability_percent:.2f}%" if summary.observed_seconds else "--"
     updated = end.astimezone(tz).strftime("%b %d, %Y %H:%M:%S %Z")
     pattern = pattern_chart(context_events, start, end, tz)
+    battery = battery_panel(
+        read_battery_telemetry(battery_root, end), tz, battery_warning_percent
+    )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -307,6 +380,10 @@ def render_dashboard(
     .metric {{ padding:18px 20px; border-right:1px solid var(--line); min-width:0; }} .metric:last-child {{ border:0; }}
     .metric-label {{ color:var(--muted); font-size:12px; }} .metric-value {{ margin-top:3px; font-size:25px; font-weight:680; white-space:nowrap; }}
     .metric-detail {{ color:var(--muted); font-size:11px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+    .server-status {{ display:grid; grid-template-columns:180px minmax(260px,1fr) auto; align-items:center; gap:22px; margin-top:18px; padding:16px 20px; }}
+    .server-summary {{ display:flex; align-items:center; gap:12px; }} .battery-icon {{ position:relative; width:44px; height:22px; padding:3px; border:2px solid #66736d; border-radius:3px; }} .battery-icon::after {{ content:""; position:absolute; right:-6px; top:5px; width:4px; height:8px; border-radius:0 2px 2px 0; background:#66736d; }} .battery-icon i {{ display:block; height:100%; background:var(--green); }}
+    .battery-value {{ font-size:22px; line-height:1; font-weight:700; }} .runtime {{ display:flex; flex-direction:column; min-width:0; }} .runtime strong {{ font-size:15px; }} .runtime span,.battery-pack span {{ color:var(--muted); font-size:11px; }} .battery-packs {{ display:flex; align-items:stretch; }} .battery-pack {{ display:flex; flex-direction:column; min-width:118px; padding:0 14px; border-left:1px solid var(--line); }} .battery-pack strong {{ font-size:12px; }}
+    .battery-low {{ border-color:#e5b7b2; background:#fff8f7; }} .battery-low .battery-icon i {{ background:var(--red); }} .battery-warning {{ color:var(--red)!important; font-weight:650; }}
     section {{ margin-top:18px; padding:20px; background:var(--surface); border:1px solid var(--line); border-radius:6px; }}
     .section-head {{ display:flex; justify-content:space-between; gap:16px; align-items:baseline; margin-bottom:15px; }}
     h2 {{ margin:0; font-size:15px; font-weight:680; }} .legend {{ display:flex; gap:14px; color:var(--muted); font-size:12px; }}
@@ -322,7 +399,7 @@ def render_dashboard(
     th {{ color:var(--muted); font-size:11px; text-align:left; text-transform:uppercase; font-weight:650; }} th,td {{ padding:10px 8px; border-bottom:1px solid #edf0ee; }} tbody tr:last-child td {{ border-bottom:0; }}
     .event-dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--green); margin-right:8px; }} .event-dot.off {{ background:var(--red); }} .source {{ color:var(--muted); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; }}
     .empty-cell {{ text-align:center; color:var(--muted); padding:30px; }} footer {{ color:var(--muted); font-size:11px; padding:16px 0 28px; }}
-    @media (max-width:760px) {{ .header-inner {{ min-height:76px; }} .metrics {{ grid-template-columns:1fr 1fr; }} .metric:nth-child(2) {{ border-right:0; }} .metric:nth-child(-n+2) {{ border-bottom:1px solid var(--line); }} .toolbar {{ align-items:flex-end; }} .metric-value {{ font-size:21px; }} }}
+    @media (max-width:760px) {{ .header-inner {{ min-height:76px; }} .metrics {{ grid-template-columns:1fr 1fr; }} .metric:nth-child(2) {{ border-right:0; }} .metric:nth-child(-n+2) {{ border-bottom:1px solid var(--line); }} .toolbar {{ align-items:flex-end; }} .metric-value {{ font-size:21px; }} .server-status {{ grid-template-columns:1fr 1fr; }} .battery-packs {{ grid-column:1/-1; }} .battery-pack:first-child {{ padding-left:0; border-left:0; }} }}
     @media (max-width:440px) {{ .header-inner,.content {{ width:min(100% - 20px,1180px); }} .subtitle {{ display:none; }} .status {{ min-width:0; padding-left:12px; column-gap:6px; }} .status-duration {{ font-size:21px; }} .status-since {{ max-width:128px; white-space:normal; line-height:1.2; }} .period {{ padding:7px 9px; }} .export {{ font-size:0; }} .export::after {{ content:"CSV"; font-size:12px; }} .metric {{ padding:14px; }} section {{ padding:14px; }} }}
   </style>
 </head>
@@ -336,6 +413,7 @@ def render_dashboard(
       <div class="metric"><div class="metric-label">Power unavailable</div><div class="metric-value">{format_duration(summary.outage_seconds)}</div><div class="metric-detail">Total outage duration</div></div>
       <div class="metric"><div class="metric-label">Outages detected</div><div class="metric-value">{summary.outage_count}</div><div class="metric-detail">Transitions in selected period</div></div>
     </div>
+    {battery}
     <section><div class="section-head"><h2>Availability timeline</h2><div class="legend"><span class="key">Available</span><span class="key off">Outage</span></div></div>{timeline_svg(context_events, start, end)}</section>
     <section><div class="section-head"><h2>Outage pattern by day and hour</h2><span class="subtitle">Local time · selected period</span></div>{pattern}</section>
     <section><div class="section-head"><h2>Event history</h2><span class="subtitle">Latest 50 events</span></div><div class="table-wrap"><table><thead><tr><th>State</th><th>Local time</th><th>Type</th><th>Source</th></tr></thead><tbody>{table_body}</tbody></table></div></section>
@@ -363,8 +441,20 @@ def make_handler(
     timezone_name: str,
     username: str = "",
     password: str = "",
+    battery_warning_percent: int = 15,
 ):
     class DashboardHandler(BaseHTTPRequestHandler):
+        def request_is_secure(self) -> bool:
+            forwarded_proto = self.headers.get("X-Forwarded-Proto", "")
+            return forwarded_proto.split(",", 1)[0].strip().lower() == "https"
+
+        def renewed_session_cookie(self) -> str | None:
+            if not username or not password:
+                return None
+            return session_cookie(
+                username, password, secure=self.request_is_secure()
+            )
+
         def is_authenticated(self) -> bool:
             return authorization_valid(
                 self.headers.get("Authorization"), username, password
@@ -389,7 +479,7 @@ def make_handler(
                 return
             if request.path == "/login":
                 if self.is_authenticated():
-                    self.send_redirect("/")
+                    self.send_redirect("/", self.renewed_session_cookie())
                 else:
                     self.send_content(
                         200, "text/html; charset=utf-8", render_login(site_name).encode("utf-8")
@@ -399,14 +489,28 @@ def make_handler(
                 self.send_redirect("/login")
                 return
             if request.path == "/":
-                body = render_dashboard(store, site_name, period, timezone_name).encode("utf-8")
-                self.send_content(200, "text/html; charset=utf-8", body)
+                body = render_dashboard(
+                    store,
+                    site_name,
+                    period,
+                    timezone_name,
+                    battery_warning_percent=battery_warning_percent,
+                ).encode("utf-8")
+                self.send_content(
+                    200,
+                    "text/html; charset=utf-8",
+                    body,
+                    self.renewed_session_cookie(),
+                )
                 return
             if request.path == "/events.csv":
                 body = csv_response(store, period)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/csv; charset=utf-8")
                 self.send_header("Content-Disposition", f'attachment; filename="grid-events-{period}.csv"')
+                cookie = self.renewed_session_cookie()
+                if cookie:
+                    self.send_header("Set-Cookie", cookie)
                 self.send_common_headers(len(body))
                 self.end_headers()
                 self.wfile.write(body)
@@ -431,9 +535,12 @@ def make_handler(
                 f"{supplied_username}:{supplied_password}", f"{username}:{password}"
             )
             if username and password and credentials_match:
-                forwarded_proto = self.headers.get("X-Forwarded-Proto", "")
-                secure = forwarded_proto.split(",", 1)[0].strip().lower() == "https"
-                self.send_redirect("/", session_cookie(username, password, secure=secure))
+                self.send_redirect(
+                    "/",
+                    session_cookie(
+                        username, password, secure=self.request_is_secure()
+                    ),
+                )
                 return
             body = render_login(site_name, invalid=True).encode("utf-8")
             self.send_content(401, "text/html; charset=utf-8", body)
@@ -446,9 +553,17 @@ def make_handler(
             self.send_common_headers(0)
             self.end_headers()
 
-        def send_content(self, status: int, content_type: str, body: bytes) -> None:
+        def send_content(
+            self,
+            status: int,
+            content_type: str,
+            body: bytes,
+            cookie: str | None = None,
+        ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
+            if cookie:
+                self.send_header("Set-Cookie", cookie)
             self.send_common_headers(len(body))
             self.end_headers()
             self.wfile.write(body)
@@ -474,9 +589,18 @@ def serve_dashboard(
     port: int = 8090,
     username: str = "",
     password: str = "",
+    battery_warning_percent: int = 15,
 ) -> None:
     server = ThreadingHTTPServer(
-        (host, port), make_handler(store, site_name, timezone_name, username, password)
+        (host, port),
+        make_handler(
+            store,
+            site_name,
+            timezone_name,
+            username,
+            password,
+            battery_warning_percent,
+        ),
     )
     logging.info("Reporting dashboard available at http://%s:%s", host, port)
     try:

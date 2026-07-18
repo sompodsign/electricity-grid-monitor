@@ -151,6 +151,7 @@ The Cloudflare DNS route and Access application must point the chosen public hos
 | `SITE_NAME` | `Home Grid` | Location shown in reports and email |
 | `TZ` | system timezone | Email display timezone |
 | `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD` | empty | Optional HTTP Basic authentication |
+| `BATTERY_WARNING_PERCENT` | `15` | Dashboard warning level; does not trigger shutdown |
 | `CLOUDFLARE_TUNNEL_ID` | empty | Optional named Cloudflare Tunnel UUID |
 | `NOTIFICATION_ENABLED` | `false` | Email feature flag |
 | `SMTP_HOST`, `SMTP_PORT` | empty, `587` | SMTP endpoint |
