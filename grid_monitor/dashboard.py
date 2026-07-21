@@ -23,6 +23,7 @@ from .storage import EventStore
 
 
 PERIODS = ("24h", "7d", "30d", "12w")
+DEFAULT_PERIOD = "24h"
 SESSION_COOKIE = "grid_session"
 SESSION_SECONDS = 30 * 24 * 60 * 60
 
@@ -100,6 +101,14 @@ def session_cookie(
     if secure:
         attributes.append("Secure")
     return "; ".join(attributes)
+
+
+def notification_token(username: str, password: str) -> str:
+    return hmac.new(
+        password.encode("utf-8"),
+        f"{username}\nnotification-toggle".encode("utf-8"),
+        "sha256",
+    ).hexdigest()
 
 
 def render_login(site_name: str, *, invalid: bool = False) -> str:
@@ -284,13 +293,14 @@ def battery_panel(
         else ""
     )
     return (
-        f'<section class="server-status{state_class}">'
-        '<div class="server-summary"><div class="battery-icon" aria-hidden="true">'
+        f'<details class="server-status{state_class}">'
+        '<summary class="server-summary"><div class="battery-icon" aria-hidden="true">'
         f'<i style="width:{level:.1f}%"></i></div><div><div class="metric-label">Server battery</div>'
-        f'<div class="battery-value">{percent_label}</div></div></div>'
+        f'<div class="battery-value">{percent_label}</div></div></summary>'
+        '<div class="battery-details">'
         f'<div class="runtime"><strong>{html.escape(runtime_label)}</strong>'
         f'<span>{html.escape(estimate)}</span>{warning_text}</div>'
-        f'<div class="battery-packs">{"".join(packs)}</div></section>'
+        f'<div class="battery-packs">{"".join(packs)}</div></div></details>'
     )
 
 
@@ -302,9 +312,11 @@ def render_dashboard(
     now: datetime | None = None,
     battery_root: Path = Path("/sys/class/power_supply"),
     battery_warning_percent: int = 15,
+    notification_enabled: bool = False,
+    notification_csrf_token: str = "",
 ) -> str:
     if period not in PERIODS:
-        period = "7d"
+        period = DEFAULT_PERIOD
     start, end = parse_period(period, now)
     summary = summarize(store, start, end)
     context_events = events_with_context(store, start, end)
@@ -326,19 +338,32 @@ def render_dashboard(
         f'<a class="period {"active" if item == period else ""}" href="/?period={item}">{item}</a>'
         for item in PERIODS
     )
+    notification_action = "off" if notification_enabled else "on"
+    notification_label = "Notifications on" if notification_enabled else "Notifications off"
     rows = []
+    next_restored_at: datetime | None = None
     for event in recent:
         local_time = event.timestamp.astimezone(tz)
         state_label = "Available" if event.state is PowerState.ON else "Outage"
+        if event.state is PowerState.ON:
+            next_restored_at = event.timestamp
+            duration = ""
+        elif next_restored_at is not None:
+            duration = format_duration(
+                (next_restored_at - event.timestamp).total_seconds()
+            )
+        else:
+            duration = f"{format_duration((end - event.timestamp).total_seconds())} ongoing"
         rows.append(
             "<tr>"
             f'<td><span class="event-dot {event.state.value}"></span>{state_label}</td>'
             f'<td>{html.escape(local_time.strftime("%b %d, %Y %H:%M:%S %Z"))}</td>'
+            f'<td class="duration">{html.escape(duration)}</td>'
             f"<td>{html.escape(event.reason.title())}</td>"
             f"<td class=\"source\">{html.escape(event.source)}</td>"
             "</tr>"
         )
-    table_body = "".join(rows) or '<tr><td colspan="4" class="empty-cell">No transitions recorded</td></tr>'
+    table_body = "".join(rows) or '<tr><td colspan="5" class="empty-cell">No transitions recorded</td></tr>'
     observed_note = (
         f"Based on {format_duration(summary.observed_seconds)} observed"
         if summary.observed_seconds
@@ -361,11 +386,12 @@ def render_dashboard(
   <style>
     :root {{ color-scheme: light; --ink:#18221e; --muted:#66736d; --line:#dce3df; --surface:#fff; --page:#f4f6f5; --green:#16734b; --red:#cf3d32; --blue:#236899; }}
     * {{ box-sizing:border-box; }}
+    html,body {{ max-width:100%; overflow-x:hidden; overflow-x:clip; }}
     body {{ margin:0; background:var(--page); color:var(--ink); font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; letter-spacing:0; }}
     header {{ background:#17241e; color:#fff; }}
     .header-inner,.content {{ width:min(1180px,calc(100% - 32px)); margin:auto; }}
-    .header-inner {{ min-height:82px; display:flex; align-items:center; justify-content:space-between; gap:20px; }}
-    h1 {{ margin:0; font-size:20px; font-weight:650; letter-spacing:0; }}
+    .header-inner {{ min-height:82px; display:flex; align-items:center; justify-content:space-between; gap:20px; }} .header-inner>* {{ min-width:0; }}
+    h1 {{ margin:0; font-size:20px; font-weight:650; letter-spacing:0; overflow-wrap:anywhere; }}
     .subtitle {{ color:#b8c5bf; font-size:12px; }}
     .status {{ display:grid; grid-template-columns:auto auto; grid-template-areas:"dot label" "duration since"; align-items:center; column-gap:8px; min-width:250px; padding-left:20px; border-left:1px solid #ffffff26; }}
     .status::before {{ grid-area:dot; content:""; width:9px; height:9px; border-radius:50%; background:#98a39e; box-shadow:0 0 0 3px #ffffff18; }}
@@ -375,20 +401,21 @@ def render_dashboard(
     .periods {{ display:flex; border:1px solid var(--line); background:#fff; border-radius:6px; overflow:hidden; }}
     .period {{ padding:7px 12px; color:var(--muted); text-decoration:none; border-right:1px solid var(--line); }}
     .period:last-child {{ border:0; }} .period.active {{ background:#243f33; color:#fff; }}
-    .toolbar-actions {{ display:flex; align-items:center; gap:16px; }} .export,.logout {{ color:var(--blue); font-weight:600; text-decoration:none; }} .logout {{ color:var(--muted); font-weight:500; }}
+    .toolbar-actions {{ display:flex; align-items:center; gap:16px; }} .notification-form {{ margin:0; }} .notification-toggle {{ display:flex; align-items:center; gap:6px; padding:0; border:0; background:none; color:var(--muted); font:inherit; font-size:12px; font-weight:600; cursor:pointer; }} .notification-toggle::before {{ content:""; width:8px; height:8px; border-radius:50%; background:#98a39e; }} .notification-toggle.enabled {{ color:var(--green); }} .notification-toggle.enabled::before {{ background:var(--green); }} .export,.logout {{ color:var(--blue); font-weight:600; text-decoration:none; }} .logout {{ color:var(--muted); font-weight:500; }}
     .metrics {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border:1px solid var(--line); border-radius:6px; background:var(--surface); }}
     .metric {{ padding:18px 20px; border-right:1px solid var(--line); min-width:0; }} .metric:last-child {{ border:0; }}
     .metric-label {{ color:var(--muted); font-size:12px; }} .metric-value {{ margin-top:3px; font-size:25px; font-weight:680; white-space:nowrap; }}
     .metric-detail {{ color:var(--muted); font-size:11px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-    .server-status {{ display:grid; grid-template-columns:180px minmax(260px,1fr) auto; align-items:center; gap:22px; margin-top:18px; padding:16px 20px; }}
-    .server-summary {{ display:flex; align-items:center; gap:12px; }} .battery-icon {{ position:relative; width:44px; height:22px; padding:3px; border:2px solid #66736d; border-radius:3px; }} .battery-icon::after {{ content:""; position:absolute; right:-6px; top:5px; width:4px; height:8px; border-radius:0 2px 2px 0; background:#66736d; }} .battery-icon i {{ display:block; height:100%; background:var(--green); }}
+    .server-status {{ margin-top:18px; padding:0; background:var(--surface); border:1px solid var(--line); border-radius:6px; }}
+    .server-summary {{ display:flex; align-items:center; gap:12px; padding:16px 20px; cursor:pointer; list-style:none; }} .server-summary::-webkit-details-marker {{ display:none; }} .server-summary::after {{ content:"Show details"; margin-left:auto; color:var(--blue); font-size:12px; font-weight:600; }} .server-status[open] .server-summary::after {{ content:"Hide details"; }} .server-summary:focus-visible {{ outline:2px solid var(--blue); outline-offset:-3px; }}
+    .battery-details {{ display:grid; grid-template-columns:minmax(260px,1fr) auto; align-items:center; gap:22px; padding:16px 20px; border-top:1px solid var(--line); }} .battery-details>* {{ min-width:0; }} .battery-icon {{ position:relative; width:44px; height:22px; padding:3px; border:2px solid #66736d; border-radius:3px; }} .battery-icon::after {{ content:""; position:absolute; right:-6px; top:5px; width:4px; height:8px; border-radius:0 2px 2px 0; background:#66736d; }} .battery-icon i {{ display:block; height:100%; background:var(--green); }}
     .battery-value {{ font-size:22px; line-height:1; font-weight:700; }} .runtime {{ display:flex; flex-direction:column; min-width:0; }} .runtime strong {{ font-size:15px; }} .runtime span,.battery-pack span {{ color:var(--muted); font-size:11px; }} .battery-packs {{ display:flex; align-items:stretch; }} .battery-pack {{ display:flex; flex-direction:column; min-width:118px; padding:0 14px; border-left:1px solid var(--line); }} .battery-pack strong {{ font-size:12px; }}
     .battery-low {{ border-color:#e5b7b2; background:#fff8f7; }} .battery-low .battery-icon i {{ background:var(--red); }} .battery-warning {{ color:var(--red)!important; font-weight:650; }}
     section {{ margin-top:18px; padding:20px; background:var(--surface); border:1px solid var(--line); border-radius:6px; }}
     .section-head {{ display:flex; justify-content:space-between; gap:16px; align-items:baseline; margin-bottom:15px; }}
     h2 {{ margin:0; font-size:15px; font-weight:680; }} .legend {{ display:flex; gap:14px; color:var(--muted); font-size:12px; }}
     .key::before {{ content:""; display:inline-block; width:8px; height:8px; margin-right:5px; border-radius:2px; background:var(--green); }} .key.off::before {{ background:var(--red); }}
-    .timeline {{ display:block; width:100%; height:auto; overflow:visible; }} .timeline text {{ fill:var(--muted); font-size:11px; }}
+    .timeline {{ display:block; width:100%; max-width:100%; height:auto; overflow:hidden; }} .timeline text {{ fill:var(--muted); font-size:11px; }}
     .empty {{ height:72px; display:grid; place-items:center; color:var(--muted); background:#f7f9f8; }}
     .heatmap-wrap {{ overflow-x:auto; padding-bottom:4px; }} .heatmap {{ border-collapse:separate; border-spacing:3px; width:100%; min-width:820px; table-layout:fixed; }}
     .heatmap th {{ padding:2px 0; border:0; text-align:center; font-size:10px; font-weight:550; color:var(--muted); }} .heatmap .weekday {{ width:38px; text-align:left; }}
@@ -399,14 +426,14 @@ def render_dashboard(
     th {{ color:var(--muted); font-size:11px; text-align:left; text-transform:uppercase; font-weight:650; }} th,td {{ padding:10px 8px; border-bottom:1px solid #edf0ee; }} tbody tr:last-child td {{ border-bottom:0; }}
     .event-dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--green); margin-right:8px; }} .event-dot.off {{ background:var(--red); }} .source {{ color:var(--muted); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; }}
     .empty-cell {{ text-align:center; color:var(--muted); padding:30px; }} footer {{ color:var(--muted); font-size:11px; padding:16px 0 28px; }}
-    @media (max-width:760px) {{ .header-inner {{ min-height:76px; }} .metrics {{ grid-template-columns:1fr 1fr; }} .metric:nth-child(2) {{ border-right:0; }} .metric:nth-child(-n+2) {{ border-bottom:1px solid var(--line); }} .toolbar {{ align-items:flex-end; }} .metric-value {{ font-size:21px; }} .server-status {{ grid-template-columns:1fr 1fr; }} .battery-packs {{ grid-column:1/-1; }} .battery-pack:first-child {{ padding-left:0; border-left:0; }} }}
-    @media (max-width:440px) {{ .header-inner,.content {{ width:min(100% - 20px,1180px); }} .subtitle {{ display:none; }} .status {{ min-width:0; padding-left:12px; column-gap:6px; }} .status-duration {{ font-size:21px; }} .status-since {{ max-width:128px; white-space:normal; line-height:1.2; }} .period {{ padding:7px 9px; }} .export {{ font-size:0; }} .export::after {{ content:"CSV"; font-size:12px; }} .metric {{ padding:14px; }} section {{ padding:14px; }} }}
+    @media (max-width:760px) {{ .header-inner {{ min-height:76px; }} .metrics {{ grid-template-columns:minmax(0,1fr) minmax(0,1fr); }} .metric:nth-child(2) {{ border-right:0; }} .metric:nth-child(-n+2) {{ border-bottom:1px solid var(--line); }} .toolbar {{ align-items:flex-end; }} .metric-value {{ font-size:21px; }} .battery-details {{ grid-template-columns:minmax(0,1fr); }} .battery-pack:first-child {{ padding-left:0; border-left:0; }} }}
+    @media (max-width:440px) {{ .header-inner,.content {{ width:calc(100% - 20px); }} .subtitle {{ display:none; }} .status {{ min-width:0; padding-left:12px; column-gap:6px; }} .status-duration {{ font-size:21px; }} .status-since {{ max-width:128px; white-space:normal; line-height:1.2; overflow-wrap:anywhere; }} .toolbar,.section-head {{ flex-wrap:wrap; }} .toolbar {{ align-items:center; gap:10px; }} .periods {{ max-width:100%; }} .period {{ padding:7px 9px; }} .toolbar-actions {{ margin-left:auto; gap:10px; }} .export {{ font-size:0; }} .export::after {{ content:"CSV"; font-size:12px; }} .metric {{ padding:14px; }} .server-summary,.battery-details {{ padding:14px; }} .server-summary::after {{ content:"Details"; }} .server-status[open] .server-summary::after {{ content:"Hide"; }} .battery-packs {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }} .battery-pack {{ min-width:0; padding:0 10px; }} section {{ padding:14px; }} .heatmap-wrap,.table-wrap {{ overflow-x:hidden; }} .heatmap {{ min-width:0; border-spacing:1px; }} .heatmap .weekday {{ width:28px; }} .heatmap th {{ font-size:7px; }} .heat {{ height:20px; }} .heat-legend {{ flex-wrap:wrap; justify-content:flex-start; }} .table-wrap table {{ min-width:0; table-layout:fixed; }} .table-wrap th:nth-child(n+4),.table-wrap td:nth-child(n+4) {{ display:none; }} .table-wrap th:first-child,.table-wrap td:first-child {{ width:31%; }} .table-wrap th:nth-child(2),.table-wrap td:nth-child(2) {{ width:43%; }} .table-wrap th,.table-wrap td {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }} }}
   </style>
 </head>
 <body>
   <header><div class="header-inner"><div><h1>{html.escape(site_name)}</h1><div class="subtitle">Electricity grid monitoring</div></div><div class="status {status_class}"><span class="status-label">{status_label}</span><strong class="status-duration">{status_duration}</strong><span class="status-since">{html.escape(status_since_label)}</span></div></div></header>
   <main class="content">
-    <div class="toolbar"><nav class="periods" aria-label="Report period">{period_links}</nav><div class="toolbar-actions"><a class="export" href="/events.csv?period={period}">Download CSV</a><a class="logout" href="/logout">Sign out</a></div></div>
+    <div class="toolbar"><nav class="periods" aria-label="Report period">{period_links}</nav><div class="toolbar-actions"><form class="notification-form" method="post" action="/notifications"><input type="hidden" name="enabled" value="{notification_action}"><input type="hidden" name="token" value="{html.escape(notification_csrf_token)}"><button class="notification-toggle {'enabled' if notification_enabled else ''}" type="submit" title="Turn email notifications {notification_action}">{notification_label}</button></form><a class="export" href="/events.csv?period={period}">Download CSV</a><a class="logout" href="/logout">Sign out</a></div></div>
     <div class="metrics">
       <div class="metric"><div class="metric-label">Availability</div><div class="metric-value">{availability}</div><div class="metric-detail">{observed_note}</div></div>
       <div class="metric"><div class="metric-label">Power available</div><div class="metric-value">{format_duration(summary.online_seconds)}</div><div class="metric-detail">Within observed time</div></div>
@@ -416,7 +443,7 @@ def render_dashboard(
     {battery}
     <section><div class="section-head"><h2>Availability timeline</h2><div class="legend"><span class="key">Available</span><span class="key off">Outage</span></div></div>{timeline_svg(context_events, start, end)}</section>
     <section><div class="section-head"><h2>Outage pattern by day and hour</h2><span class="subtitle">Local time · selected period</span></div>{pattern}</section>
-    <section><div class="section-head"><h2>Event history</h2><span class="subtitle">Latest 50 events</span></div><div class="table-wrap"><table><thead><tr><th>State</th><th>Local time</th><th>Type</th><th>Source</th></tr></thead><tbody>{table_body}</tbody></table></div></section>
+    <section><div class="section-head"><h2>Event history</h2><span class="subtitle">Latest 50 events</span></div><div class="table-wrap"><table><thead><tr><th>State</th><th>Local time</th><th>Duration</th><th>Type</th><th>Source</th></tr></thead><tbody>{table_body}</tbody></table></div></section>
     <footer>Last refreshed {html.escape(updated)} · Refreshes every 30 seconds</footer>
   </main>
 </body>
@@ -425,7 +452,7 @@ def render_dashboard(
 
 def csv_response(store: EventStore, period: str, now: datetime | None = None) -> bytes:
     if period not in PERIODS:
-        period = "7d"
+        period = DEFAULT_PERIOD
     start, end = parse_period(period, now)
     output = io.StringIO(newline="")
     writer = csv.writer(output)
@@ -442,6 +469,7 @@ def make_handler(
     username: str = "",
     password: str = "",
     battery_warning_percent: int = 15,
+    default_notification_enabled: bool = False,
 ):
     class DashboardHandler(BaseHTTPRequestHandler):
         def request_is_secure(self) -> bool:
@@ -463,8 +491,8 @@ def make_handler(
         def do_GET(self) -> None:
             request = urlparse(self.path)
             query = parse_qs(request.query)
-            period = query.get("period", ["7d"])[0]
-            period = period if period in PERIODS else "7d"
+            period = query.get("period", [DEFAULT_PERIOD])[0]
+            period = period if period in PERIODS else DEFAULT_PERIOD
             if request.path == "/favicon.ico":
                 self.send_content(204, "image/x-icon", b"")
                 return
@@ -495,6 +523,10 @@ def make_handler(
                     period,
                     timezone_name,
                     battery_warning_percent=battery_warning_percent,
+                    notification_enabled=store.notification_enabled(
+                        default_notification_enabled
+                    ),
+                    notification_csrf_token=notification_token(username, password),
                 ).encode("utf-8")
                 self.send_content(
                     200,
@@ -518,7 +550,8 @@ def make_handler(
             self.send_content(404, "text/plain; charset=utf-8", b"Not found\n")
 
         def do_POST(self) -> None:
-            if urlparse(self.path).path != "/login":
+            request_path = urlparse(self.path).path
+            if request_path not in {"/login", "/notifications"}:
                 self.send_content(404, "text/plain; charset=utf-8", b"Not found\n")
                 return
             try:
@@ -529,6 +562,20 @@ def make_handler(
                 self.send_content(400, "text/plain; charset=utf-8", b"Invalid request\n")
                 return
             fields = parse_qs(self.rfile.read(content_length).decode("utf-8", errors="replace"))
+            if request_path == "/notifications":
+                supplied_token = fields.get("token", [""])[0]
+                enabled = fields.get("enabled", [""])[0]
+                if not self.is_authenticated():
+                    self.send_redirect("/login")
+                    return
+                if not hmac.compare_digest(
+                    supplied_token, notification_token(username, password)
+                ) or enabled not in {"on", "off"}:
+                    self.send_content(403, "text/plain; charset=utf-8", b"Forbidden\n")
+                    return
+                store.set_notification_enabled(enabled == "on")
+                self.send_redirect("/", self.renewed_session_cookie())
+                return
             supplied_username = fields.get("username", [""])[0]
             supplied_password = fields.get("password", [""])[0]
             credentials_match = hmac.compare_digest(
@@ -590,6 +637,7 @@ def serve_dashboard(
     username: str = "",
     password: str = "",
     battery_warning_percent: int = 15,
+    notification_enabled: bool = False,
 ) -> None:
     server = ThreadingHTTPServer(
         (host, port),
@@ -600,6 +648,7 @@ def serve_dashboard(
             username,
             password,
             battery_warning_percent,
+            notification_enabled,
         ),
     )
     logging.info("Reporting dashboard available at http://%s:%s", host, port)

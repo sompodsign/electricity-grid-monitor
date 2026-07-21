@@ -46,7 +46,32 @@ class MonitorTests(unittest.TestCase):
             monitor.check_once()
             self.assertEqual([event.state for event in sent], [PowerState.OFF])
 
+    def test_runtime_notification_override_takes_effect_without_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sent = []
+            states = iter([PowerState.ON, PowerState.OFF, PowerState.ON])
+            config = settings(
+                Path(directory) / "events.db",
+                notification_enabled=True,
+                smtp_host="smtp.example.com",
+                smtp_from_email="sender@example.com",
+                notification_to_email="recipient@example.com",
+            )
+            monitor = GridMonitor(
+                config,
+                state_reader=lambda _path: next(states),
+                notifier=lambda event, _settings: sent.append(event),
+            )
+            monitor.store.initialize()
+            monitor.store.set_notification_enabled(False)
+            monitor.check_once()
+            monitor.check_once()
+            self.assertEqual(sent, [])
+
+            monitor.store.set_notification_enabled(True)
+            monitor.check_once()
+            self.assertEqual([event.state for event in sent], [PowerState.ON])
+
 
 if __name__ == "__main__":
     unittest.main()
-

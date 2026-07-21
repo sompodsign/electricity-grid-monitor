@@ -45,7 +45,10 @@ class GridMonitor:
         event = self.store.add(event)
         LOGGER.info("Recorded %s event from %s", event.state.value, event.source)
 
-        if self.settings.notification_enabled and event.reason == "transition":
+        notifications_enabled = self.store.notification_enabled(
+            self.settings.notification_enabled
+        )
+        if notifications_enabled and event.reason == "transition":
             try:
                 self.notifier(event, self.settings)
                 LOGGER.info("Notification sent to %s", self.settings.notification_to_email)
@@ -81,4 +84,3 @@ def run_until_signal(monitor: GridMonitor) -> None:
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     monitor.run(stop_event)
-

@@ -161,6 +161,7 @@ def run_command(args: argparse.Namespace, settings: Settings) -> int:
             settings.dashboard_username,
             settings.dashboard_password,
             settings.battery_warning_percent,
+            settings.notification_enabled,
         )
         return 0
 

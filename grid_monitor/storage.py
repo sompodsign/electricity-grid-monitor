@@ -37,6 +37,27 @@ class EventStore:
                 "CREATE INDEX IF NOT EXISTS idx_power_events_timestamp "
                 "ON power_events(timestamp)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS runtime_settings ("
+                "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+
+    def notification_enabled(self, default: bool) -> bool:
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                "SELECT value FROM runtime_settings WHERE key = 'notification_enabled'"
+            ).fetchone()
+        if row is None:
+            return default
+        return row["value"] == "true"
+
+    def set_notification_enabled(self, enabled: bool) -> None:
+        with closing(self.connect()) as connection, connection:
+            connection.execute(
+                "INSERT INTO runtime_settings(key, value) VALUES "
+                "('notification_enabled', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                ("true" if enabled else "false",),
+            )
 
     def add(self, event: PowerEvent) -> PowerEvent:
         with closing(self.connect()) as connection, connection:
