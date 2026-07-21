@@ -59,6 +59,7 @@ class Settings:
     telegram_enabled: bool
     telegram_bot_token: str
     telegram_chat_id: str
+    notification_language: str
     site_name: str
     timezone: str
     dashboard_username: str
@@ -89,6 +90,7 @@ class Settings:
             telegram_enabled=env_bool("TELEGRAM_ENABLED"),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
+            notification_language=os.getenv("NOTIFICATION_LANGUAGE", "en").strip().lower(),
             site_name=os.getenv("SITE_NAME", "Home Grid").strip() or "Home Grid",
             timezone=os.getenv("TZ", "").strip(),
             dashboard_username=os.getenv("DASHBOARD_USERNAME", "").strip(),
@@ -105,6 +107,8 @@ class Settings:
             raise ValueError("SMTP_PORT must be between 1 and 65535")
         if self.smtp_use_ssl and self.smtp_use_tls:
             raise ValueError("SMTP_USE_SSL and SMTP_USE_TLS cannot both be enabled")
+        if self.notification_language not in {"en", "bn"}:
+            raise ValueError("NOTIFICATION_LANGUAGE must be either en or bn")
         if self.notification_enabled:
             if not self.email_notification_enabled and not self.telegram_enabled:
                 raise ValueError(

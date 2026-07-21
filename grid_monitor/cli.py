@@ -174,6 +174,7 @@ def run_command(args: argparse.Namespace, settings: Settings) -> int:
             settings.dashboard_password,
             settings.battery_warning_percent,
             settings.notification_enabled,
+            settings.notification_language,
         )
         return 0
 

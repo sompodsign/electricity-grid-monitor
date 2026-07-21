@@ -170,6 +170,7 @@ The Cloudflare DNS route and Access application must point the chosen public hos
 | `BATTERY_WARNING_PERCENT` | `15` | Dashboard warning level; does not trigger shutdown |
 | `CLOUDFLARE_TUNNEL_ID` | empty | Optional named Cloudflare Tunnel UUID |
 | `NOTIFICATION_ENABLED` | `false` | Master alert switch, also controlled by the dashboard |
+| `NOTIFICATION_LANGUAGE` | `en` | Telegram alert language: `en` or `bn` |
 | `EMAIL_NOTIFICATION_ENABLED` | `true` | Enable the email delivery channel |
 | `SMTP_HOST`, `SMTP_PORT` | empty, `587` | SMTP endpoint |
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | empty | Optional SMTP authentication |

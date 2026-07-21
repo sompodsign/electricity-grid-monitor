@@ -38,10 +38,26 @@ class TelegramTests(unittest.TestCase):
         message = build_telegram_text(event, config)
 
         self.assertIn("Power Outage", message)
-        self.assertIn("📍 Test Grid", message)
+        self.assertIn("📍 Location: Test Grid", message)
         self.assertIn("📅 Tuesday, 21 July 2026", message)
         self.assertIn("🕐 12:30:00 PM (UTC+00:00)", message)
         self.assertIn("Source: AC", message)
+
+    def test_message_can_render_in_bengali(self) -> None:
+        config = settings(
+            Path("events.db"), timezone="Asia/Dhaka", notification_language="bn"
+        )
+        event = PowerEvent(
+            datetime(2026, 7, 21, 19, 57, 52, tzinfo=timezone.utc),
+            PowerState.ON,
+            "AC",
+        )
+
+        message = build_telegram_text(event, config)
+
+        self.assertIn("বিদ্যুৎ ফিরে এসেছে", message)
+        self.assertIn("বুধবার, ২২ জুলাই ২০২৬", message)
+        self.assertIn("রাত ১:৫৭:৫২ (UTC+06:00)", message)
 
     def test_sender_posts_message_to_bot_api(self) -> None:
         config = settings(

@@ -21,6 +21,7 @@ def settings(database_path: Path, **overrides: object) -> Settings:
         "telegram_enabled": False,
         "telegram_bot_token": "",
         "telegram_chat_id": "",
+        "notification_language": "en",
         "site_name": "Test Grid",
         "timezone": "UTC",
         "dashboard_username": "",

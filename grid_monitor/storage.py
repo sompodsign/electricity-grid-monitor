@@ -59,6 +59,25 @@ class EventStore:
                 ("true" if enabled else "false",),
             )
 
+    def notification_language(self, default: str) -> str:
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                "SELECT value FROM runtime_settings WHERE key = 'notification_language'"
+            ).fetchone()
+        if row is None or row["value"] not in {"en", "bn"}:
+            return default
+        return row["value"]
+
+    def set_notification_language(self, language: str) -> None:
+        if language not in {"en", "bn"}:
+            raise ValueError("Notification language must be either en or bn")
+        with closing(self.connect()) as connection, connection:
+            connection.execute(
+                "INSERT INTO runtime_settings(key, value) VALUES "
+                "('notification_language', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (language,),
+            )
+
     def add(self, event: PowerEvent) -> PowerEvent:
         with closing(self.connect()) as connection, connection:
             cursor = connection.execute(

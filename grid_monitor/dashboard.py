@@ -314,6 +314,7 @@ def render_dashboard(
     battery_warning_percent: int = 15,
     notification_enabled: bool = False,
     notification_csrf_token: str = "",
+    notification_language: str = "en",
 ) -> str:
     if period not in PERIODS:
         period = DEFAULT_PERIOD
@@ -340,6 +341,9 @@ def render_dashboard(
     )
     notification_action = "off" if notification_enabled else "on"
     notification_label = "Notifications on" if notification_enabled else "Notifications off"
+    language_action = "bn" if notification_language == "en" else "en"
+    language_label = "English" if notification_language == "en" else "বাংলা"
+    language_target = "Bengali" if language_action == "bn" else "English"
     rows = []
     next_restored_at: datetime | None = None
     for event in recent:
@@ -397,11 +401,12 @@ def render_dashboard(
     .status::before {{ grid-area:dot; content:""; width:9px; height:9px; border-radius:50%; background:#98a39e; box-shadow:0 0 0 3px #ffffff18; }}
     .status.online::before {{ background:#56d292; }} .status.offline::before {{ background:#ff7066; }}
     .status-label {{ grid-area:label; color:#dbe4e0; font-size:11px; font-weight:700; text-transform:uppercase; }} .status-duration {{ grid-area:duration; margin-top:2px; font-size:25px; line-height:1; font-weight:700; }} .status-since {{ grid-area:since; align-self:end; color:#b8c5bf; font-size:11px; white-space:nowrap; }}
-    .toolbar {{ display:flex; justify-content:space-between; align-items:center; gap:16px; padding:24px 0 16px; }}
+    .toolbar {{ display:flex; align-items:center; padding:24px 0 16px; }}
     .periods {{ display:flex; border:1px solid var(--line); background:#fff; border-radius:6px; overflow:hidden; }}
     .period {{ padding:7px 12px; color:var(--muted); text-decoration:none; border-right:1px solid var(--line); }}
     .period:last-child {{ border:0; }} .period.active {{ background:#243f33; color:#fff; }}
-    .toolbar-actions {{ display:flex; align-items:center; gap:16px; }} .notification-form {{ margin:0; }} .notification-toggle {{ display:flex; align-items:center; gap:6px; padding:0; border:0; background:none; color:var(--muted); font:inherit; font-size:12px; font-weight:600; cursor:pointer; }} .notification-toggle::before {{ content:""; width:8px; height:8px; border-radius:50%; background:#98a39e; }} .notification-toggle.enabled {{ color:var(--green); }} .notification-toggle.enabled::before {{ background:var(--green); }} .export,.logout {{ color:var(--blue); font-weight:600; text-decoration:none; }} .logout {{ color:var(--muted); font-weight:500; }}
+    .toolbar-actions {{ display:flex; align-items:center; gap:16px; }} .notification-form,.language-form {{ margin:0; }} .notification-toggle,.language-toggle {{ display:flex; align-items:center; gap:6px; padding:0; border:0; background:none; color:var(--muted); font:inherit; font-size:12px; font-weight:600; cursor:pointer; }} .notification-toggle::before {{ content:""; width:8px; height:8px; border-radius:50%; background:#98a39e; }} .notification-toggle.enabled {{ color:var(--green); }} .notification-toggle.enabled::before {{ background:var(--green); }} .language-toggle {{ color:var(--blue); }} .export,.logout {{ color:var(--blue); font-weight:600; text-decoration:none; }} .logout {{ color:var(--muted); font-weight:500; }}
+    .settings-panel {{ display:flex; align-items:center; justify-content:space-between; gap:18px; margin-top:18px; padding:16px 20px; background:var(--surface); border:1px solid var(--line); border-radius:6px; }} .settings-title {{ font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }}
     .metrics {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border:1px solid var(--line); border-radius:6px; background:var(--surface); }}
     .metric {{ padding:18px 20px; border-right:1px solid var(--line); min-width:0; }} .metric:last-child {{ border:0; }}
     .metric-label {{ color:var(--muted); font-size:12px; }} .metric-value {{ margin-top:3px; font-size:25px; font-weight:680; white-space:nowrap; }}
@@ -427,13 +432,13 @@ def render_dashboard(
     .event-dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--green); margin-right:8px; }} .event-dot.off {{ background:var(--red); }} .source {{ color:var(--muted); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; }}
     .empty-cell {{ text-align:center; color:var(--muted); padding:30px; }} footer {{ color:var(--muted); font-size:11px; padding:16px 0 28px; }}
     @media (max-width:760px) {{ .header-inner {{ min-height:76px; }} .metrics {{ grid-template-columns:minmax(0,1fr) minmax(0,1fr); }} .metric:nth-child(2) {{ border-right:0; }} .metric:nth-child(-n+2) {{ border-bottom:1px solid var(--line); }} .toolbar {{ align-items:flex-end; }} .metric-value {{ font-size:21px; }} .battery-details {{ grid-template-columns:minmax(0,1fr); }} .battery-pack:first-child {{ padding-left:0; border-left:0; }} }}
-    @media (max-width:440px) {{ .header-inner,.content {{ width:calc(100% - 20px); }} .subtitle {{ display:none; }} .status {{ min-width:0; padding-left:12px; column-gap:6px; }} .status-duration {{ font-size:21px; }} .status-since {{ max-width:128px; white-space:normal; line-height:1.2; overflow-wrap:anywhere; }} .toolbar,.section-head {{ flex-wrap:wrap; }} .toolbar {{ align-items:center; gap:10px; }} .periods {{ max-width:100%; }} .period {{ padding:7px 9px; }} .toolbar-actions {{ margin-left:auto; gap:10px; }} .export {{ font-size:0; }} .export::after {{ content:"CSV"; font-size:12px; }} .metric {{ padding:14px; }} .server-summary,.battery-details {{ padding:14px; }} .server-summary::after {{ content:"Details"; }} .server-status[open] .server-summary::after {{ content:"Hide"; }} .battery-packs {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }} .battery-pack {{ min-width:0; padding:0 10px; }} section {{ padding:14px; }} .heatmap-wrap,.table-wrap {{ overflow-x:hidden; }} .heatmap {{ min-width:0; border-spacing:1px; }} .heatmap .weekday {{ width:28px; }} .heatmap th {{ font-size:7px; }} .heat {{ height:20px; }} .heat-legend {{ flex-wrap:wrap; justify-content:flex-start; }} .table-wrap table {{ min-width:0; table-layout:fixed; }} .table-wrap th:nth-child(n+4),.table-wrap td:nth-child(n+4) {{ display:none; }} .table-wrap th:first-child,.table-wrap td:first-child {{ width:31%; }} .table-wrap th:nth-child(2),.table-wrap td:nth-child(2) {{ width:43%; }} .table-wrap th,.table-wrap td {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }} }}
+    @media (max-width:440px) {{ .header-inner,.content {{ width:calc(100% - 20px); }} .subtitle {{ display:none; }} .status {{ min-width:0; padding-left:12px; column-gap:6px; }} .status-duration {{ font-size:21px; }} .status-since {{ max-width:128px; white-space:normal; line-height:1.2; overflow-wrap:anywhere; }} .toolbar,.section-head {{ flex-wrap:wrap; }} .toolbar {{ align-items:center; gap:10px; }} .periods {{ max-width:100%; }} .period {{ padding:7px 9px; }} .settings-panel {{ align-items:flex-start; padding:14px; }} .toolbar-actions {{ margin-left:auto; gap:10px; flex-wrap:wrap; justify-content:flex-end; }} .export {{ font-size:0; }} .export::after {{ content:"CSV"; font-size:12px; }} .metric {{ padding:14px; }} .server-summary,.battery-details {{ padding:14px; }} .server-summary::after {{ content:"Details"; }} .server-status[open] .server-summary::after {{ content:"Hide"; }} .battery-packs {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }} .battery-pack {{ min-width:0; padding:0 10px; }} section {{ padding:14px; }} .heatmap-wrap,.table-wrap {{ overflow-x:hidden; }} .heatmap {{ min-width:0; border-spacing:1px; }} .heatmap .weekday {{ width:28px; }} .heatmap th {{ font-size:7px; }} .heat {{ height:20px; }} .heat-legend {{ flex-wrap:wrap; justify-content:flex-start; }} .table-wrap table {{ min-width:0; table-layout:fixed; }} .table-wrap th:nth-child(n+4),.table-wrap td:nth-child(n+4) {{ display:none; }} .table-wrap th:first-child,.table-wrap td:first-child {{ width:31%; }} .table-wrap th:nth-child(2),.table-wrap td:nth-child(2) {{ width:43%; }} .table-wrap th,.table-wrap td {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }} }}
   </style>
 </head>
 <body>
   <header><div class="header-inner"><div><h1>{html.escape(site_name)}</h1><div class="subtitle">Electricity grid monitoring</div></div><div class="status {status_class}"><span class="status-label">{status_label}</span><strong class="status-duration">{status_duration}</strong><span class="status-since">{html.escape(status_since_label)}</span></div></div></header>
   <main class="content">
-    <div class="toolbar"><nav class="periods" aria-label="Report period">{period_links}</nav><div class="toolbar-actions"><form class="notification-form" method="post" action="/notifications"><input type="hidden" name="enabled" value="{notification_action}"><input type="hidden" name="token" value="{html.escape(notification_csrf_token)}"><button class="notification-toggle {'enabled' if notification_enabled else ''}" type="submit" title="Turn notifications {notification_action}">{notification_label}</button></form><a class="export" href="/events.csv?period={period}">Download CSV</a><a class="logout" href="/logout">Sign out</a></div></div>
+    <div class="toolbar"><nav class="periods" aria-label="Report period">{period_links}</nav></div>
     <div class="metrics">
       <div class="metric"><div class="metric-label">Availability</div><div class="metric-value">{availability}</div><div class="metric-detail">{observed_note}</div></div>
       <div class="metric"><div class="metric-label">Power available</div><div class="metric-value">{format_duration(summary.online_seconds)}</div><div class="metric-detail">Within observed time</div></div>
@@ -444,6 +449,7 @@ def render_dashboard(
     <section><div class="section-head"><h2>Availability timeline</h2><div class="legend"><span class="key">Available</span><span class="key off">Outage</span></div></div>{timeline_svg(context_events, start, end)}</section>
     <section><div class="section-head"><h2>Outage pattern by day and hour</h2><span class="subtitle">Local time · selected period</span></div>{pattern}</section>
     <section><div class="section-head"><h2>Event history</h2><span class="subtitle">Latest 50 events</span></div><div class="table-wrap"><table><thead><tr><th>State</th><th>Local time</th><th>Duration</th><th>Type</th><th>Source</th></tr></thead><tbody>{table_body}</tbody></table></div></section>
+    <div class="settings-panel"><span class="settings-title">Settings</span><div class="toolbar-actions"><form class="notification-form" method="post" action="/notifications"><input type="hidden" name="enabled" value="{notification_action}"><input type="hidden" name="token" value="{html.escape(notification_csrf_token)}"><button class="notification-toggle {'enabled' if notification_enabled else ''}" type="submit" title="Turn notifications {notification_action}">{notification_label}</button></form><form class="language-form" method="post" action="/notification-language"><input type="hidden" name="language" value="{language_action}"><input type="hidden" name="token" value="{html.escape(notification_csrf_token)}"><button class="language-toggle" type="submit" title="Switch Telegram alerts to {language_target}">Language: {language_label}</button></form><a class="export" href="/events.csv?period={period}">Download CSV</a><a class="logout" href="/logout">Sign out</a></div></div>
     <footer>Last refreshed {html.escape(updated)} · Refreshes every 30 seconds</footer>
   </main>
 </body>
@@ -470,6 +476,7 @@ def make_handler(
     password: str = "",
     battery_warning_percent: int = 15,
     default_notification_enabled: bool = False,
+    default_notification_language: str = "en",
 ):
     class DashboardHandler(BaseHTTPRequestHandler):
         def request_is_secure(self) -> bool:
@@ -527,6 +534,9 @@ def make_handler(
                         default_notification_enabled
                     ),
                     notification_csrf_token=notification_token(username, password),
+                    notification_language=store.notification_language(
+                        default_notification_language
+                    ),
                 ).encode("utf-8")
                 self.send_content(
                     200,
@@ -551,7 +561,7 @@ def make_handler(
 
         def do_POST(self) -> None:
             request_path = urlparse(self.path).path
-            if request_path not in {"/login", "/notifications"}:
+            if request_path not in {"/login", "/notifications", "/notification-language"}:
                 self.send_content(404, "text/plain; charset=utf-8", b"Not found\n")
                 return
             try:
@@ -574,6 +584,20 @@ def make_handler(
                     self.send_content(403, "text/plain; charset=utf-8", b"Forbidden\n")
                     return
                 store.set_notification_enabled(enabled == "on")
+                self.send_redirect("/", self.renewed_session_cookie())
+                return
+            if request_path == "/notification-language":
+                supplied_token = fields.get("token", [""])[0]
+                language = fields.get("language", [""])[0]
+                if not self.is_authenticated():
+                    self.send_redirect("/login")
+                    return
+                if not hmac.compare_digest(
+                    supplied_token, notification_token(username, password)
+                ) or language not in {"en", "bn"}:
+                    self.send_content(403, "text/plain; charset=utf-8", b"Forbidden\n")
+                    return
+                store.set_notification_language(language)
                 self.send_redirect("/", self.renewed_session_cookie())
                 return
             supplied_username = fields.get("username", [""])[0]
@@ -638,6 +662,7 @@ def serve_dashboard(
     password: str = "",
     battery_warning_percent: int = 15,
     notification_enabled: bool = False,
+    notification_language: str = "en",
 ) -> None:
     server = ThreadingHTTPServer(
         (host, port),
@@ -649,6 +674,7 @@ def serve_dashboard(
             password,
             battery_warning_percent,
             notification_enabled,
+            notification_language,
         ),
     )
     logging.info("Reporting dashboard available at http://%s:%s", host, port)

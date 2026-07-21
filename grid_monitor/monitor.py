@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import signal
 import threading
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -50,7 +51,13 @@ class GridMonitor:
         )
         if notifications_enabled and event.reason == "transition":
             try:
-                self.notifier(event, self.settings)
+                language = self.store.notification_language(
+                    self.settings.notification_language
+                )
+                self.notifier(
+                    event,
+                    replace(self.settings, notification_language=language),
+                )
                 LOGGER.info("Notification delivery completed")
             except Exception:
                 LOGGER.exception("Could not send power notification")
