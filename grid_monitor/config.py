@@ -47,6 +47,7 @@ class Settings:
     poll_interval_seconds: float
     power_supply_path: Path | None
     notification_enabled: bool
+    email_notification_enabled: bool
     smtp_host: str
     smtp_port: int
     smtp_username: str
@@ -55,6 +56,9 @@ class Settings:
     notification_to_email: str
     smtp_use_tls: bool
     smtp_use_ssl: bool
+    telegram_enabled: bool
+    telegram_bot_token: str
+    telegram_chat_id: str
     site_name: str
     timezone: str
     dashboard_username: str
@@ -73,6 +77,7 @@ class Settings:
             poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "5")),
             power_supply_path=Path(supply).expanduser() if supply else None,
             notification_enabled=env_bool("NOTIFICATION_ENABLED"),
+            email_notification_enabled=env_bool("EMAIL_NOTIFICATION_ENABLED", True),
             smtp_host=os.getenv("SMTP_HOST", "").strip(),
             smtp_port=int(os.getenv("SMTP_PORT", "587")),
             smtp_username=os.getenv("SMTP_USERNAME", "").strip(),
@@ -81,6 +86,9 @@ class Settings:
             notification_to_email=os.getenv("NOTIFICATION_TO_EMAIL", "").strip(),
             smtp_use_tls=env_bool("SMTP_USE_TLS", True),
             smtp_use_ssl=env_bool("SMTP_USE_SSL", False),
+            telegram_enabled=env_bool("TELEGRAM_ENABLED"),
+            telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+            telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
             site_name=os.getenv("SITE_NAME", "Home Grid").strip() or "Home Grid",
             timezone=os.getenv("TZ", "").strip(),
             dashboard_username=os.getenv("DASHBOARD_USERNAME", "").strip(),
@@ -98,17 +106,33 @@ class Settings:
         if self.smtp_use_ssl and self.smtp_use_tls:
             raise ValueError("SMTP_USE_SSL and SMTP_USE_TLS cannot both be enabled")
         if self.notification_enabled:
-            required = {
-                "SMTP_HOST": self.smtp_host,
-                "SMTP_FROM_EMAIL": self.smtp_from_email,
-                "NOTIFICATION_TO_EMAIL": self.notification_to_email,
-            }
-            missing = [name for name, value in required.items() if not value]
-            if missing:
+            if not self.email_notification_enabled and not self.telegram_enabled:
                 raise ValueError(
-                    "Notifications are enabled, but these settings are missing: "
-                    + ", ".join(missing)
+                    "Notifications are enabled, but no delivery channel is enabled"
                 )
+            if self.email_notification_enabled:
+                required = {
+                    "SMTP_HOST": self.smtp_host,
+                    "SMTP_FROM_EMAIL": self.smtp_from_email,
+                    "NOTIFICATION_TO_EMAIL": self.notification_to_email,
+                }
+                missing = [name for name, value in required.items() if not value]
+                if missing:
+                    raise ValueError(
+                        "Email notifications are enabled, but these settings are missing: "
+                        + ", ".join(missing)
+                    )
+            if self.telegram_enabled:
+                required = {
+                    "TELEGRAM_BOT_TOKEN": self.telegram_bot_token,
+                    "TELEGRAM_CHAT_ID": self.telegram_chat_id,
+                }
+                missing = [name for name, value in required.items() if not value]
+                if missing:
+                    raise ValueError(
+                        "Telegram notifications are enabled, but these settings are missing: "
+                        + ", ".join(missing)
+                    )
         if bool(self.dashboard_username) != bool(self.dashboard_password):
             raise ValueError(
                 "DASHBOARD_USERNAME and DASHBOARD_PASSWORD must both be set or both be empty"

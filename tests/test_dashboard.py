@@ -73,6 +73,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("<th>Duration</th>", page)
             self.assertIn('<td class="duration">1h 0m</td>', page)
             self.assertIn("Notifications on", page)
+            self.assertIn('title="Turn notifications off"', page)
             self.assertIn('name="enabled" value="off"', page)
             self.assertIn('name="token" value="test-token"', page)
 

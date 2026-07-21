@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Callable
 
 from .config import Settings
-from .emailer import send_notification
 from .models import PowerEvent, PowerState
+from .notifier import send_notifications
 from .power import discover_power_supply, read_power_state
 from .storage import EventStore
 
@@ -22,7 +22,7 @@ class GridMonitor:
         settings: Settings,
         *,
         state_reader: Callable[[Path], PowerState] = read_power_state,
-        notifier: Callable[[PowerEvent, Settings], None] = send_notification,
+        notifier: Callable[[PowerEvent, Settings], None] = send_notifications,
     ):
         self.settings = settings
         self.store = EventStore(settings.database_path)
@@ -51,7 +51,7 @@ class GridMonitor:
         if notifications_enabled and event.reason == "transition":
             try:
                 self.notifier(event, self.settings)
-                LOGGER.info("Notification sent to %s", self.settings.notification_to_email)
+                LOGGER.info("Notification delivery completed")
             except Exception:
                 LOGGER.exception("Could not send power notification")
         return event

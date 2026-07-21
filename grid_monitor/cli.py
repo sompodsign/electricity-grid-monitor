@@ -11,6 +11,7 @@ from .dashboard import serve_dashboard
 from .emailer import send_notification
 from .models import PowerEvent, PowerState
 from .monitor import GridMonitor, run_until_signal
+from .telegram import send_telegram_notification
 from .power import discover_power_supply, read_power_state
 from .reporting import export_csv, parse_period, plot_events, summarize
 from .storage import EventStore
@@ -48,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=port_number, default=8090)
 
     commands.add_parser("test-email", help="send a sample notification using SMTP settings")
+    commands.add_parser("test-telegram", help="send a sample notification using Telegram")
     return parser
 
 
@@ -144,11 +146,21 @@ def run_command(args: argparse.Namespace, settings: Settings) -> int:
         return 0
 
     if args.command == "test-email":
-        if not settings.notification_enabled:
-            raise ValueError("Set NOTIFICATION_ENABLED=true before testing email")
+        if not settings.email_notification_enabled:
+            raise ValueError("Set EMAIL_NOTIFICATION_ENABLED=true before testing email")
         event = PowerEvent(datetime.now(timezone.utc), PowerState.ON, "test", "transition")
         send_notification(event, settings)
         print(f"Test email sent to {settings.notification_to_email}")
+        return 0
+
+    if args.command == "test-telegram":
+        if not settings.telegram_enabled:
+            raise ValueError("Set TELEGRAM_ENABLED=true before testing Telegram")
+        if not settings.telegram_bot_token or not settings.telegram_chat_id:
+            raise ValueError("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID before testing Telegram")
+        event = PowerEvent(datetime.now(timezone.utc), PowerState.ON, "test", "transition")
+        send_telegram_notification(event, settings)
+        print("Test Telegram notification sent")
         return 0
 
     if args.command == "serve":

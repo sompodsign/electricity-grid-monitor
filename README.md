@@ -1,7 +1,7 @@
 # Electricity Grid Monitor
 
 A small Linux service that watches mains power, records electricity transitions in SQLite,
-reports availability, produces PNG charts, and optionally sends responsive HTML email alerts.
+reports availability, produces PNG charts, and optionally sends email and Telegram alerts.
 
 On this laptop the auto-detected source is `/sys/class/power_supply/AC/online`.
 
@@ -12,8 +12,9 @@ On this laptop the auto-detected source is `/sys/class/power_supply/AC/online`.
 - Shows live status, history, outage count, and availability percentage
 - Exports raw events to CSV and generates timeline/daily availability plots
 - Serves a responsive local reporting dashboard without extra dependencies
-- Enables or disables email with `NOTIFICATION_ENABLED`
+- Enables or disables all alert delivery from the dashboard
 - Sends multipart plain-text and HTML email through any SMTP provider
+- Sends immediate outage and restoration messages through a Telegram bot
 - Runs continuously as a hardened systemd service
 
 ## Requirements
@@ -49,6 +50,15 @@ NOTIFICATION_ENABLED=true
 
 For Gmail, use an app password rather than the account password. Keep `.env` private; it is
 excluded from Git.
+
+For Telegram, create a bot with [BotFather](https://t.me/BotFather), send the bot `/start`, and
+configure its token and your chat ID:
+
+```dotenv
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=your-private-bot-token
+TELEGRAM_CHAT_ID=your-chat-id
+```
 
 ## Use
 
@@ -91,6 +101,12 @@ Test SMTP after enabling and configuring notifications:
 
 ```bash
 .venv/bin/grid-monitor test-email
+```
+
+Test Telegram after enabling and configuring that delivery channel:
+
+```bash
+.venv/bin/grid-monitor test-telegram
 ```
 
 ## Run At Startup
@@ -153,13 +169,17 @@ The Cloudflare DNS route and Access application must point the chosen public hos
 | `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD` | empty | Optional HTTP Basic authentication |
 | `BATTERY_WARNING_PERCENT` | `15` | Dashboard warning level; does not trigger shutdown |
 | `CLOUDFLARE_TUNNEL_ID` | empty | Optional named Cloudflare Tunnel UUID |
-| `NOTIFICATION_ENABLED` | `false` | Email feature flag |
+| `NOTIFICATION_ENABLED` | `false` | Master alert switch, also controlled by the dashboard |
+| `EMAIL_NOTIFICATION_ENABLED` | `true` | Enable the email delivery channel |
 | `SMTP_HOST`, `SMTP_PORT` | empty, `587` | SMTP endpoint |
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | empty | Optional SMTP authentication |
 | `SMTP_FROM_EMAIL` | empty | Sender address |
 | `NOTIFICATION_TO_EMAIL` | empty | Alert recipient |
 | `SMTP_USE_TLS` | `true` | Upgrade SMTP with STARTTLS |
 | `SMTP_USE_SSL` | `false` | Use implicit TLS instead |
+| `TELEGRAM_ENABLED` | `false` | Enable the Telegram delivery channel |
+| `TELEGRAM_BOT_TOKEN` | empty | Private token issued by BotFather |
+| `TELEGRAM_CHAT_ID` | empty | User, group, or channel receiving alerts |
 
 `SMTP_USE_TLS` and `SMTP_USE_SSL` cannot both be true.
 

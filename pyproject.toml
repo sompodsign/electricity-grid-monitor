@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "electricity-grid-monitor"
 version = "1.0.0"
-description = "Monitor mains electricity transitions, report outages, and send email alerts."
+description = "Monitor mains electricity transitions, report outages, and send email or Telegram alerts."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
@@ -23,4 +23,3 @@ include = ["grid_monitor*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-
