@@ -12,7 +12,7 @@ from .emailer import send_notification
 from .models import PowerEvent, PowerState
 from .monitor import GridMonitor, run_until_signal
 from .telegram import send_telegram_notification
-from .power import discover_power_supply, read_power_state
+from .power import MainsStateReader, discover_power_supply
 from .reporting import export_csv, parse_period, plot_events, summarize
 from .storage import EventStore
 
@@ -122,7 +122,9 @@ def run_command(args: argparse.Namespace, settings: Settings) -> int:
     store = initialize_store(settings)
     if args.command == "status":
         supply = settings.power_supply_path or discover_power_supply()
-        live = read_power_state(supply)
+        live = MainsStateReader(
+            supply, settings.database_path.with_suffix(".mains")
+        )(supply)
         latest = store.latest()
         print(f"Live mains power: {live.value.upper()} ({supply})")
         print(f"Notifications: {'ENABLED' if settings.notification_enabled else 'DISABLED'}")
