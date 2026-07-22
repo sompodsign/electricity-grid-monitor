@@ -1,0 +1,20 @@
+services:
+  pihole:
+    container_name: pihole
+    image: pihole/pihole:2026.05.0
+    network_mode: host
+    environment:
+      TZ: "Asia/Dhaka"
+      FTLCONF_webserver_api_password: "${PIHOLE_PASSWORD}"
+      FTLCONF_dns_listeningMode: "ALL"
+      FTLCONF_dns_upstreams: "1.1.1.1;1.0.0.1"
+      FTLCONF_webserver_port: "8082"
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    volumes:
+      - pihole_data:/etc/pihole
+    restart: unless-stopped
+
+volumes:
+  pihole_data:
