@@ -11,7 +11,7 @@ from typing import Callable
 from .config import Settings
 from .models import PowerEvent, PowerState
 from .notifier import send_notifications
-from .power import MainsStateReader, discover_power_supply
+from .power import discover_power_supply, read_power_state
 from .storage import EventStore
 
 LOGGER = logging.getLogger(__name__)
@@ -22,15 +22,13 @@ class GridMonitor:
         self,
         settings: Settings,
         *,
-        state_reader: Callable[[Path], PowerState] | None = None,
+        state_reader: Callable[[Path], PowerState] = read_power_state,
         notifier: Callable[[PowerEvent, Settings], None] = send_notifications,
     ):
         self.settings = settings
         self.store = EventStore(settings.database_path)
         self.supply_path = settings.power_supply_path or discover_power_supply()
-        self.state_reader = state_reader or MainsStateReader(
-            self.supply_path, settings.database_path.with_suffix(".mains")
-        )
+        self.state_reader = state_reader
         self.notifier = notifier
 
     def check_once(self) -> PowerEvent | None:

@@ -254,9 +254,6 @@ def battery_panel(
     telemetry: BatteryTelemetry | None,
     tz,
     warning_percent: int,
-    backup_status: str = "",
-    mains_state: PowerState | None = None,
-    usb_c_active: bool = False,
 ) -> str:
     if telemetry is None:
         return ""
@@ -295,81 +292,16 @@ def battery_panel(
         if warning
         else ""
     )
-    if mains_state is PowerState.OFF:
-        mains_class = "unavailable"
-        mains_value = "Disconnected"
-        mains_detail = "Main AC is out; USB-C IPS backup has taken over"
-    elif usb_c_active:
-        mains_class = "ready"
-        mains_value = "Connected · Standby"
-        mains_detail = "USB-C Power Delivery currently supplies the laptop"
-    elif mains_state is PowerState.ON:
-        mains_class = "active"
-        mains_value = "Active · Supplying power"
-        mains_detail = "Main AC currently supplies the laptop"
-    else:
-        mains_class = "unknown"
-        mains_value = "Status unknown"
-        mains_detail = "Waiting for the current Main AC state"
-    mains_status = (
-        f'<div class="power-source mains-power {mains_class}">'
-        '<span class="power-source-icon" aria-hidden="true"></span><div>'
-        '<div class="metric-label">Main AC power</div>'
-        f'<div class="power-source-value">{html.escape(mains_value)}</div>'
-        f'<div class="power-source-detail">{html.escape(mains_detail)}</div>'
-        '</div><span class="power-source-protocol">Lenovo AC adapter</span></div>'
-    )
     return (
         f'<details class="server-status{state_class}">'
         '<summary class="server-summary"><div class="battery-icon" aria-hidden="true">'
         f'<i style="width:{level:.1f}%"></i></div><div><div class="metric-label">Server battery</div>'
         f'<div class="battery-value">{percent_label}</div></div></summary>'
         '<div class="battery-details">'
-        f'{mains_status}'
-        f'{backup_status}'
         f'<div class="runtime"><strong>{html.escape(runtime_label)}</strong>'
         f'<span>{html.escape(estimate)}</span>{warning_text}</div>'
         f'<div class="battery-packs">{"".join(packs)}</div></div></details>'
     )
-
-
-def usb_c_backup_panel(root: Path, mains_state: PowerState | None) -> tuple[str, bool]:
-    connected = False
-    power_delivery = False
-    for directory in sorted(root.iterdir()) if root.is_dir() else ():
-        try:
-            supply_type = (directory / "type").read_text(encoding="ascii").strip().lower()
-            online = (directory / "online").read_text(encoding="ascii").strip() == "1"
-        except OSError:
-            continue
-        if supply_type not in {"usb", "usb_c"}:
-            continue
-        connected = connected or online
-        try:
-            usb_types = (directory / "usb_type").read_text(encoding="ascii").strip()
-        except OSError:
-            usb_types = ""
-        power_delivery = power_delivery or "[PD]" in usb_types or "PD" in usb_types.split()
-
-    if connected:
-        state_class = "active"
-        state_label = "Active · Supplying power"
-        detail = "The USB-C IPS connection currently supplies the laptop"
-    else:
-        state_class = "disconnected"
-        state_label = "Disconnected"
-        detail = "Connect the IPS to USB-C to keep the laptop online during an outage"
-
-    protocol = "USB-C Power Delivery" if power_delivery else "USB-C backup input"
-    panel = (
-        f'<div class="power-source backup-status {state_class}">'
-        '<span class="power-source-icon" aria-hidden="true"></span>'
-        '<div><div class="metric-label">IPS backup power</div>'
-        f'<div class="power-source-value">{html.escape(state_label)}</div>'
-        f'<div class="power-source-detail">{html.escape(detail)}</div></div>'
-        f'<span class="power-source-protocol">{html.escape(protocol)}</span></div>'
-    )
-    return panel, connected
 
 
 def render_dashboard(
@@ -444,14 +376,10 @@ def render_dashboard(
     availability = f"{summary.availability_percent:.2f}%" if summary.observed_seconds else "--"
     updated = end.astimezone(tz).strftime("%b %d, %Y %H:%M:%S %Z")
     pattern = pattern_chart(context_events, start, end, tz)
-    usb_c_backup, usb_c_active = usb_c_backup_panel(battery_root, current)
     battery = battery_panel(
         read_battery_telemetry(battery_root, end),
         tz,
         battery_warning_percent,
-        usb_c_backup,
-        current,
-        usb_c_active,
     )
 
     return f"""<!doctype html>
@@ -485,9 +413,6 @@ def render_dashboard(
     .metric {{ padding:18px 20px; border-right:1px solid var(--line); min-width:0; }} .metric:last-child {{ border:0; }}
     .metric-label {{ color:var(--muted); font-size:12px; }} .metric-value {{ margin-top:3px; font-size:25px; font-weight:680; white-space:nowrap; }}
     .metric-detail {{ color:var(--muted); font-size:11px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-    .power-source {{ grid-column:1/-1; display:flex; align-items:center; gap:12px; padding-bottom:14px; border-bottom:1px solid var(--line); }} .power-source>div {{ min-width:0; }}
-    .power-source-icon {{ flex:0 0 auto; width:12px; height:12px; border-radius:50%; background:#98a39e; box-shadow:0 0 0 4px #98a39e22; }} .power-source.active .power-source-icon {{ background:var(--green); box-shadow:0 0 0 4px #16734b33; }} .power-source.unavailable .power-source-icon,.power-source.disconnected .power-source-icon {{ background:var(--red); box-shadow:0 0 0 4px #cf3d3220; }}
-    .power-source-value {{ font-size:18px; line-height:1.25; font-weight:680; }} .power-source-detail {{ margin-top:2px; color:var(--muted); font-size:11px; }} .power-source-protocol {{ margin-left:auto; color:var(--muted); font-size:11px; white-space:nowrap; }}
     .server-status {{ margin-top:18px; padding:0; background:var(--surface); border:1px solid var(--line); border-radius:6px; }}
     .server-summary {{ display:flex; align-items:center; gap:12px; padding:16px 20px; cursor:pointer; list-style:none; }} .server-summary::-webkit-details-marker {{ display:none; }} .server-summary::after {{ content:"Show details"; margin-left:auto; color:var(--blue); font-size:12px; font-weight:600; }} .server-status[open] .server-summary::after {{ content:"Hide details"; }} .server-summary:focus-visible {{ outline:2px solid var(--blue); outline-offset:-3px; }}
     .battery-details {{ display:grid; grid-template-columns:minmax(260px,1fr) auto; align-items:center; gap:22px; padding:16px 20px; border-top:1px solid var(--line); }} .battery-details>* {{ min-width:0; }} .battery-icon {{ position:relative; width:44px; height:22px; padding:3px; border:2px solid #66736d; border-radius:3px; }} .battery-icon::after {{ content:""; position:absolute; right:-6px; top:5px; width:4px; height:8px; border-radius:0 2px 2px 0; background:#66736d; }} .battery-icon i {{ display:block; height:100%; background:var(--green); }}
@@ -509,7 +434,7 @@ def render_dashboard(
     .event-dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--green); margin-right:8px; }} .event-dot.off {{ background:var(--red); }} .source {{ color:var(--muted); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; }}
     .empty-cell {{ text-align:center; color:var(--muted); padding:30px; }} footer {{ color:var(--muted); font-size:11px; padding:16px 0 28px; }}
     @media (max-width:760px) {{ .header-inner {{ min-height:76px; }} .metrics {{ grid-template-columns:minmax(0,1fr) minmax(0,1fr); }} .metric:nth-child(2) {{ border-right:0; }} .metric:nth-child(-n+2) {{ border-bottom:1px solid var(--line); }} .toolbar {{ align-items:flex-end; }} .metric-value {{ font-size:21px; }} .battery-details {{ grid-template-columns:minmax(0,1fr); }} .battery-pack:first-child {{ padding-left:0; border-left:0; }} }}
-    @media (max-width:440px) {{ .header-inner,.content {{ width:calc(100% - 20px); }} .subtitle {{ display:none; }} .status {{ min-width:0; padding-left:12px; column-gap:6px; }} .status-duration {{ font-size:21px; }} .status-since {{ max-width:128px; white-space:normal; line-height:1.2; overflow-wrap:anywhere; }} .toolbar,.section-head {{ flex-wrap:wrap; }} .toolbar {{ align-items:center; gap:10px; }} .periods {{ max-width:100%; }} .period {{ padding:7px 9px; }} .settings-panel {{ align-items:flex-start; padding:14px; }} .toolbar-actions {{ margin-left:auto; gap:10px; flex-wrap:wrap; justify-content:flex-end; }} .export {{ font-size:0; }} .export::after {{ content:"CSV"; font-size:12px; }} .metric {{ padding:14px; }} .power-source {{ align-items:flex-start; }} .power-source-protocol {{ display:none; }} .server-summary,.battery-details {{ padding:14px; }} .server-summary::after {{ content:"Details"; }} .server-status[open] .server-summary::after {{ content:"Hide"; }} .battery-packs {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }} .battery-pack {{ min-width:0; padding:0 10px; }} section {{ padding:14px; }} .heatmap-wrap,.table-wrap {{ overflow-x:hidden; }} .heatmap {{ min-width:0; border-spacing:1px; }} .heatmap .weekday {{ width:28px; }} .heatmap th {{ font-size:7px; }} .heat {{ height:20px; }} .heat-legend {{ flex-wrap:wrap; justify-content:flex-start; }} .table-wrap table {{ min-width:0; table-layout:fixed; }} .table-wrap th:nth-child(n+4),.table-wrap td:nth-child(n+4) {{ display:none; }} .table-wrap th:first-child,.table-wrap td:first-child {{ width:31%; }} .table-wrap th:nth-child(2),.table-wrap td:nth-child(2) {{ width:43%; }} .table-wrap th,.table-wrap td {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }} }}
+    @media (max-width:440px) {{ .header-inner,.content {{ width:calc(100% - 20px); }} .subtitle {{ display:none; }} .status {{ min-width:0; padding-left:12px; column-gap:6px; }} .status-duration {{ font-size:21px; }} .status-since {{ max-width:128px; white-space:normal; line-height:1.2; overflow-wrap:anywhere; }} .toolbar,.section-head {{ flex-wrap:wrap; }} .toolbar {{ align-items:center; gap:10px; }} .periods {{ max-width:100%; }} .period {{ padding:7px 9px; }} .settings-panel {{ align-items:flex-start; padding:14px; }} .toolbar-actions {{ margin-left:auto; gap:10px; flex-wrap:wrap; justify-content:flex-end; }} .export {{ font-size:0; }} .export::after {{ content:"CSV"; font-size:12px; }} .metric {{ padding:14px; }} .server-summary,.battery-details {{ padding:14px; }} .server-summary::after {{ content:"Details"; }} .server-status[open] .server-summary::after {{ content:"Hide"; }} .battery-packs {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }} .battery-pack {{ min-width:0; padding:0 10px; }} section {{ padding:14px; }} .heatmap-wrap,.table-wrap {{ overflow-x:hidden; }} .heatmap {{ min-width:0; border-spacing:1px; }} .heatmap .weekday {{ width:28px; }} .heatmap th {{ font-size:7px; }} .heat {{ height:20px; }} .heat-legend {{ flex-wrap:wrap; justify-content:flex-start; }} .table-wrap table {{ min-width:0; table-layout:fixed; }} .table-wrap th:nth-child(n+4),.table-wrap td:nth-child(n+4) {{ display:none; }} .table-wrap th:first-child,.table-wrap td:first-child {{ width:31%; }} .table-wrap th:nth-child(2),.table-wrap td:nth-child(2) {{ width:43%; }} .table-wrap th,.table-wrap td {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }} }}
   </style>
 </head>
 <body>
